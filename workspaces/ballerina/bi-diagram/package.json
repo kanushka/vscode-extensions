@@ -35,15 +35,26 @@
         "@emotion/react": "^11.9.3",
         "@emotion/styled": "^11.10.5",
         "dagre": "~0.8.5",
-        "lodash": "~4.17.21"
+        "lodash": "~4.17.21",
+        "@vscode/codicons": "^0.0.34"
     },
     "devDependencies": {
-        "@storybook/react": "^6.3.7",
+        "@storybook/react": "6.5.16",
+        "@storybook/addon-links": "6.5.16",
+        "@storybook/addon-essentials": "6.5.16",
+        "@storybook/addon-interactions": "6.5.16",
+        "@storybook/builder-webpack5": "6.5.16",
+        "@storybook/manager-webpack5": "6.5.16",
         "@types/react": "18.2.0",
         "@types/react-dom": "18.2.0",
-        "typescript": "5.8.3",
+        "typescript": "5.4.5",
         "@types/dagre": "~0.7.52",
         "@types/lodash": "~4.17.16",
         "copyfiles": "^2.4.1"
+    },
+    "pnpm": {
+        "overrides": {
+            "webpack-virtual-modules": "^0.4.6"
+        }
     }
 }

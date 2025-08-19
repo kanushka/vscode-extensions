@@ -1,3 +1,8 @@
+import React from "react";
+import "@vscode/codicons/dist/codicon.css";
+import "./lightTheme.css";
+import "./darkTheme.css";
+
 export const parameters = {
     actions: { argTypesRegex: "^on[A-Z].*" },
     controls: {
@@ -10,13 +15,11 @@ export const parameters = {
 
 export const decorators = [
     (Story, context) => {
-        if (context.globals.theme === "Dark_Theme") {
-            import("../.storybook/darkTheme.css");
-        } else if (context.globals.theme === "Light_Theme") {
-            import("../.storybook/lightTheme.css");
-        }
-        import("@vscode/codicons/dist/codicon.css");
-        return <Story />;
+    const themeClass = context.globals.theme === "Dark_Theme" ? "dark" : "light";
+    const root = document.documentElement;
+    root.classList.remove("dark", "light");
+    root.classList.add(themeClass);
+    return React.createElement(Story);
     },
 ];
 

@@ -2,4 +2,11 @@ module.exports = {
     stories: ["../src/**/*.stories.mdx", "../src/**/*.stories.@(js|jsx|ts|tsx)"],
     addons: ["@storybook/addon-links", "@storybook/addon-essentials", "@storybook/addon-interactions"],
     framework: "@storybook/react",
+    core: {
+        builder: "webpack5",
+    },
+    typescript: {
+        // Avoid using react-docgen-typescript plugin which breaks with TS >=5
+        reactDocgen: "react-docgen",
+    },
 };
