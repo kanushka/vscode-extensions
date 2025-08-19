@@ -12,9 +12,10 @@
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@vscode/codicons": "0.0.36",
     "fantasticon": "^3.0.0",
     "icon-font-generator": "^2.1.11",
     "jsonc-parser": "^3.3.1",
-    "@vscode/codicons": "0.0.36"
+    "ts-loader": "^9.5.2"
   }
 }

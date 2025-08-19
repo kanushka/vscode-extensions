@@ -1,50 +1,36 @@
 {
-    "fileName": "/Users/gayanka/dev/wso2/test/BI_PetStore/PetService.bal",
+    "fileName": "/Users/gayanka/dev/wso2/test/test_project/automation.bal",
     "nodes": [
         {
-            "id": "38073",
+            "id": "35093",
             "metadata": {
-                "label": "HTTP API"
+                "label": "Start",
+                "data": {
+                    "kind": "Function",
+                    "label": "main",
+                    "return": "error?"
+                }
             },
             "codedata": {
                 "node": "EVENT_START",
                 "lineRange": {
-                    "fileName": "PetService.bal",
+                    "fileName": "automation.bal",
                     "startLine": {
-                        "line": 6,
-                        "offset": 4
+                        "line": 2,
+                        "offset": 38
                     },
                     "endLine": {
-                        "line": 14,
-                        "offset": 5
+                        "line": 8,
+                        "offset": 1
                     }
-                }
+                },
+                "sourceCode": "public function main() returns error? {\n    do {\n    } on fail error e {\n        log:printError(\"Error occurred\", 'error = e);\n        return e;\n    }\n}"
             },
             "returning": false,
-            "properties": {
-                "method": {
-                    "metadata": {
-                        "label": "Method",
-                        "description": "HTTP Method"
-                    },
-                    "value": "get",
-                    "optional": false,
-                    "editable": true
-                },
-                "path": {
-                    "metadata": {
-                        "label": "Path",
-                        "description": "HTTP Path"
-                    },
-                    "value": "pets",
-                    "optional": false,
-                    "editable": true
-                }
-            },
-            "flags": 2048
+            "flags": 0
         },
         {
-            "id": "39131",
+            "id": "34973",
             "metadata": {
                 "label": "ErrorHandler",
                 "description": "Catch and handle errors"
@@ -52,16 +38,17 @@
             "codedata": {
                 "node": "ERROR_HANDLER",
                 "lineRange": {
-                    "fileName": "PetService.bal",
+                    "fileName": "automation.bal",
                     "startLine": {
-                        "line": 7,
-                        "offset": 8
+                        "line": 3,
+                        "offset": 4
                     },
                     "endLine": {
-                        "line": 13,
-                        "offset": 9
+                        "line": 7,
+                        "offset": 5
                     }
-                }
+                },
+                "sourceCode": "do {\n    } on fail error e {\n        log:printError(\"Error occurred\", 'error = e);\n        return e;\n    }"
             },
             "returning": false,
             "branches": [
@@ -71,21 +58,20 @@
                     "codedata": {
                         "node": "BODY",
                         "lineRange": {
-                            "fileName": "PetService.bal",
+                            "fileName": "automation.bal",
                             "startLine": {
-                                "line": 7,
-                                "offset": 11
+                                "line": 3,
+                                "offset": 7
                             },
                             "endLine": {
-                                "line": 11,
-                                "offset": 9
+                                "line": 4,
+                                "offset": 5
                             }
-                        }
+                        },
+                        "sourceCode": "{\n    }"
                     },
                     "repeatable": "ONE",
-                    "children": [
-                        
-                    ]
+                    "children": []
                 },
                 {
                     "label": "On Failure",
@@ -93,16 +79,17 @@
                     "codedata": {
                         "node": "ON_FAILURE",
                         "lineRange": {
-                            "fileName": "PetService.bal",
+                            "fileName": "automation.bal",
                             "startLine": {
-                                "line": 11,
-                                "offset": 26
+                                "line": 4,
+                                "offset": 22
                             },
                             "endLine": {
-                                "line": 13,
-                                "offset": 9
+                                "line": 7,
+                                "offset": 5
                             }
-                        }
+                        },
+                        "sourceCode": "{\n        log:printError(\"Error occurred\", 'error = e);\n        return e;\n    }"
                     },
                     "repeatable": "ZERO_OR_ONE",
                     "properties": {
@@ -111,49 +98,215 @@
                                 "label": "Ignore",
                                 "description": "Ignore the error value"
                             },
-                            "value": "true",
+                            "valueType": "EXPRESSION",
+                            "value": "false",
                             "optional": false,
-                            "editable": true
+                            "editable": true,
+                            "advanced": false,
+                            "hidden": false
                         },
                         "errorVariable": {
                             "metadata": {
                                 "label": "Error Variable",
                                 "description": "Name of the error variable"
                             },
+                            "valueType": "IDENTIFIER",
                             "value": "e ",
+                            "placeholder": "err",
                             "optional": false,
-                            "editable": true
+                            "editable": true,
+                            "advanced": false,
+                            "hidden": false
                         },
                         "errorType": {
                             "metadata": {
                                 "label": "Error Type",
                                 "description": "Type of the error"
                             },
-                            "value": "mongodb:ballerinax/mongodb:5.0.0:error<ballerinax/mongodb:5.0.0:DatabaseErrorDetail>|mongodb:ballerinax/mongodb:5.0.0:error|annotations:error",
+                            "valueType": "TYPE",
+                            "value": "error",
+                            "placeholder": "error",
                             "optional": false,
-                            "editable": true
+                            "editable": true,
+                            "advanced": false,
+                            "hidden": false
                         }
                     },
                     "children": [
                         {
-                            "id": "44066",
+                            "id": "37005",
+                            "metadata": {
+                                "label": "printError",
+                                "description": "Prints error logs.\n```ballerina\nerror e = error(\"error occurred\");\nlog:printError(\"error log with cause\", 'error = e, id = 845315);\n```\n",
+                                "icon": "https://bcentral-packageicons.azureedge.net/images/ballerina_log_2.12.0.png"
+                            },
+                            "codedata": {
+                                "node": "FUNCTION_CALL",
+                                "org": "ballerina",
+                                "module": "log",
+                                "packageName": "log",
+                                "symbol": "printError",
+                                "version": "2.12.0",
+                                "lineRange": {
+                                    "fileName": "automation.bal",
+                                    "startLine": {
+                                        "line": 5,
+                                        "offset": 8
+                                    },
+                                    "endLine": {
+                                        "line": 5,
+                                        "offset": 53
+                                    }
+                                },
+                                "sourceCode": "log:printError(\"Error occurred\", 'error = e);"
+                            },
+                            "returning": false,
+                            "properties": {
+                                "msg": {
+                                    "metadata": {
+                                        "label": "Msg",
+                                        "description": "The message to be logged"
+                                    },
+                                    "valueType": "EXPRESSION",
+                                    "valueTypeConstraint": "string|log:PrintableRawTemplate",
+                                    "value": "\"Error occurred\"",
+                                    "placeholder": "\"\"",
+                                    "optional": false,
+                                    "editable": true,
+                                    "advanced": false,
+                                    "hidden": false,
+                                    "codedata": {
+                                        "kind": "REQUIRED",
+                                        "originalName": "msg"
+                                    },
+                                    "typeMembers": [
+                                        {
+                                            "type": "PrintableRawTemplate",
+                                            "packageInfo": "ballerina:log:2.12.0",
+                                            "packageName": "log",
+                                            "kind": "OBJECT_TYPE",
+                                            "selected": false
+                                        },
+                                        {
+                                            "type": "string",
+                                            "packageInfo": "",
+                                            "packageName": "",
+                                            "kind": "BASIC_TYPE",
+                                            "selected": true
+                                        }
+                                    ]
+                                },
+                                "error": {
+                                    "metadata": {
+                                        "label": "Error",
+                                        "description": "The error struct to be logged"
+                                    },
+                                    "valueType": "EXPRESSION",
+                                    "valueTypeConstraint": "error|()",
+                                    "value": "e",
+                                    "placeholder": "()",
+                                    "optional": true,
+                                    "editable": true,
+                                    "advanced": true,
+                                    "hidden": false,
+                                    "codedata": {
+                                        "kind": "DEFAULTABLE",
+                                        "originalName": "'error"
+                                    },
+                                    "typeMembers": [
+                                        {
+                                            "type": "()",
+                                            "packageInfo": "",
+                                            "packageName": "",
+                                            "kind": "BASIC_TYPE",
+                                            "selected": false
+                                        },
+                                        {
+                                            "type": "error",
+                                            "packageInfo": "ballerina:lang.annotations:0.0.0",
+                                            "packageName": "lang.annotations",
+                                            "kind": "ERROR_TYPE",
+                                            "selected": true
+                                        }
+                                    ],
+                                    "defaultValue": "()"
+                                },
+                                "stackTrace": {
+                                    "metadata": {
+                                        "label": "Stack Trace",
+                                        "description": "The error stack trace to be logged"
+                                    },
+                                    "valueType": "EXPRESSION",
+                                    "valueTypeConstraint": "error:StackFrame[]|()",
+                                    "placeholder": "()",
+                                    "optional": true,
+                                    "editable": true,
+                                    "advanced": true,
+                                    "hidden": false,
+                                    "codedata": {
+                                        "kind": "DEFAULTABLE",
+                                        "originalName": "stackTrace"
+                                    },
+                                    "typeMembers": [
+                                        {
+                                            "type": "()",
+                                            "packageInfo": "",
+                                            "packageName": "",
+                                            "kind": "BASIC_TYPE",
+                                            "selected": false
+                                        },
+                                        {
+                                            "type": "StackFrame",
+                                            "packageInfo": "ballerina:lang.error:0.0.0",
+                                            "packageName": "lang.error",
+                                            "kind": "ARRAY_TYPE",
+                                            "selected": false
+                                        }
+                                    ],
+                                    "defaultValue": "()"
+                                },
+                                "additionalValues": {
+                                    "metadata": {
+                                        "label": "Additional Values",
+                                        "description": "Capture key value pairs"
+                                    },
+                                    "valueType": "MAPPING_EXPRESSION_SET",
+                                    "valueTypeConstraint": "log:Value",
+                                    "value": [],
+                                    "placeholder": "{}",
+                                    "optional": true,
+                                    "editable": true,
+                                    "advanced": true,
+                                    "hidden": false,
+                                    "codedata": {
+                                        "kind": "INCLUDED_RECORD_REST",
+                                        "originalName": "Additional Values"
+                                    },
+                                    "typeMembers": []
+                                }
+                            },
+                            "flags": 0
+                        },
+                        {
+                            "id": "37961",
                             "metadata": {
                                 "label": "Return",
-                                "description": "Value of 'http:INTERNAL_SERVER_ERROR'"
+                                "description": "Value of 'e'"
                             },
                             "codedata": {
                                 "node": "RETURN",
                                 "lineRange": {
-                                    "fileName": "PetService.bal",
+                                    "fileName": "automation.bal",
                                     "startLine": {
-                                        "line": 12,
-                                        "offset": 12
+                                        "line": 6,
+                                        "offset": 8
                                     },
                                     "endLine": {
-                                        "line": 12,
-                                        "offset": 46
+                                        "line": 6,
+                                        "offset": 17
                                     }
-                                }
+                                },
+                                "sourceCode": "return e;"
                             },
                             "returning": true,
                             "properties": {
@@ -162,10 +315,12 @@
                                         "label": "Expression",
                                         "description": "Return value"
                                     },
-                                    "valueType": "ballerina/http:2.11.3:InternalServerError & readonly",
-                                    "value": "http:INTERNAL_SERVER_ERROR",
+                                    "valueType": "ACTION_OR_EXPRESSION",
+                                    "value": "e",
                                     "optional": false,
-                                    "editable": true
+                                    "editable": true,
+                                    "advanced": false,
+                                    "hidden": false
                                 }
                             },
                             "flags": 0
@@ -176,73 +331,5 @@
             "flags": 0
         }
     ],
-    "connections": [
-        {
-            "id": "34775",
-            "metadata": {
-                "label": "New Connection",
-                "description": "Create a new connection"
-            },
-            "codedata": {
-                "node": "NEW_CONNECTION",
-                "org": "ballerinax",
-                "module": "mongodb",
-                "object": "Client",
-                "symbol": "init",
-                "lineRange": {
-                    "fileName": "PetService.bal",
-                    "startLine": {
-                        "line": 3,
-                        "offset": 0
-                    },
-                    "endLine": {
-                        "line": 3,
-                        "offset": 55
-                    }
-                }
-            },
-            "returning": false,
-            "properties": {
-                "scope": {
-                    "metadata": {
-                        "label": "Connection Scope",
-                        "description": "Scope of the connection, Global or Local"
-                    },
-                    "valueType": "ENUM",
-                    "value": "Global",
-                    "optional": false,
-                    "editable": true
-                },
-                "config": {
-                    "metadata": {
-                        "label": "config",
-                        "description": "The connection configurations for connecting to a MongoDB server\n"
-                    },
-                    "valueType": "EXPRESSION",
-                    "value": "{connection: {}}",
-                    "optional": false,
-                    "editable": true
-                },
-                "variable": {
-                    "metadata": {
-                        "label": "Data variable",
-                        "description": "Name of the variable"
-                    },
-                    "value": "dbClient",
-                    "optional": false,
-                    "editable": true
-                },
-                "type": {
-                    "metadata": {
-                        "label": "Data type",
-                        "description": "Type of the variable"
-                    },
-                    "value": "mongodb:Client",
-                    "optional": false,
-                    "editable": true
-                }
-            },
-            "flags": 1
-        }
-    ]
+    "connections": []
 }
