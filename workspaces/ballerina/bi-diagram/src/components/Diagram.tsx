@@ -16,34 +16,11 @@
  * under the License.
  */
 
-import React, { useState, useEffect, memo } from "react";
-import { DiagramEngine, DiagramModel } from "@projectstorm/react-diagrams";
-import { cloneDeep } from "lodash";
-import { NavigationWrapperCanvasWidget } from "@wso2/ui-toolkit";
-
-import {
-    clearDiagramZoomAndPosition,
-    generateEngine,
-    hasDiagramZoomAndPosition,
-    loadDiagramZoomAndPosition,
-    registerListeners,
-    resetDiagramZoomAndPosition,
-} from "../utils/diagram";
-import { DiagramCanvas } from "./DiagramCanvas";
-import { Flow, NodeModel, FlowNode, Branch, LineRange, NodePosition, ToolData } from "../utils/types";
-import { NodeFactoryVisitor } from "../visitors/NodeFactoryVisitor";
-import { NodeLinkModel } from "./NodeLink";
-import { OverlayLayerModel } from "./OverlayLayer";
+import React, { useState, memo } from "react";
+import { Flow, FlowNode, Branch, LineRange, NodePosition, ToolData } from "../utils/types";
 import { DiagramContextProvider, DiagramContextState, ExpressionContextProps } from "./DiagramContext";
-import { SizingVisitor } from "../visitors/SizingVisitor";
-import { PositionVisitor } from "../visitors/PositionVisitor";
-import { InitVisitor } from "../visitors/InitVisitor";
-import { LinkTargetVisitor } from "../visitors/LinkTargetVisitor";
-import { NodeTypes } from "../resources/constants";
-import Controls from "./Controls";
-import { CurrentBreakpointsResponse as BreakpointInfo, traverseFlow } from "@wso2/ballerina-core";
-import { BreakpointVisitor } from "../visitors/BreakpointVisitor";
-import { BaseNodeModel } from "./nodes/BaseNode";
+import { CurrentBreakpointsResponse as BreakpointInfo } from "@wso2/ballerina-core";
+import { DiagramCore } from "./DiagramCore";
 
 export interface DiagramProps {
     model: Flow;
@@ -88,6 +65,7 @@ export interface DiagramProps {
     getProjectPath?: (fileName: string) => Promise<string>;
 }
 
+// Wrapper component with context provider
 export function Diagram(props: DiagramProps) {
     const {
         model,
@@ -113,164 +91,9 @@ export function Diagram(props: DiagramProps) {
         getProjectPath
     } = props;
 
-    const [showErrorFlow, setShowErrorFlow] = useState(false);
-    const [diagramEngine] = useState<DiagramEngine>(generateEngine());
-    const [diagramModel, setDiagramModel] = useState<DiagramModel | null>(null);
     const [showComponentPanel, setShowComponentPanel] = useState(false);
+    const [showErrorFlow, setShowErrorFlow] = useState(false);
     const [expandedErrorHandler, setExpandedErrorHandler] = useState<string | undefined>(undefined);
-
-    useEffect(() => {
-        if (diagramEngine) {
-            const { nodes, links } = getDiagramData();
-            drawDiagram(nodes, links);
-        }
-    }, [model, showErrorFlow, expandedErrorHandler]);
-
-    useEffect(() => {
-        console.log(">>> Init diagram model", model);
-        return () => {
-            clearDiagramZoomAndPosition();
-        };
-    }, []);
-
-    const getDiagramData = () => {
-        let flowModel = cloneDeep(model);
-
-        // Check if active breakpoint is within onFailure nodes and update expandedErrorHandler before running visitors
-        let currentExpandedErrorHandler = expandedErrorHandler;
-        if (breakpointInfo?.activeBreakpoint) {
-            const errorHandlerToExpand = getErrorHandlerIdForActiveBreakpoint(flowModel, breakpointInfo);
-            if (errorHandlerToExpand && expandedErrorHandler !== errorHandlerToExpand) {
-                currentExpandedErrorHandler = errorHandlerToExpand;
-                setExpandedErrorHandler(errorHandlerToExpand);
-            }
-        }
-
-        const initVisitor = new InitVisitor(flowModel, currentExpandedErrorHandler);
-        traverseFlow(flowModel, initVisitor);
-        const sizingVisitor = new SizingVisitor();
-        traverseFlow(flowModel, sizingVisitor);
-        const positionVisitor = new PositionVisitor();
-        traverseFlow(flowModel, positionVisitor);
-        if (breakpointInfo) {
-            const breakpointVisitor = new BreakpointVisitor(breakpointInfo);
-            traverseFlow(flowModel, breakpointVisitor);
-        }
-        // create diagram nodes and links
-        const nodeVisitor = new NodeFactoryVisitor();
-        traverseFlow(flowModel, nodeVisitor);
-
-        const nodes = nodeVisitor.getNodes();
-        const links = nodeVisitor.getLinks();
-
-        const addTargetVisitor = new LinkTargetVisitor(model, nodes);
-        traverseFlow(flowModel, addTargetVisitor);
-        return { nodes, links };
-    };
-
-    // Helper function to find error handlers with active breakpoints in onFailure branches
-    const getErrorHandlerIdForActiveBreakpoint = (flow: Flow, breakpointInfo: BreakpointInfo): string | undefined => {
-        if (!breakpointInfo.activeBreakpoint) {
-            return undefined;
-        }
-
-        let errorHandlerIdToExpand: string | undefined;
-        const activeBreakpoint = breakpointInfo.activeBreakpoint;
-
-        const checkNode = (node: FlowNode): void => {
-            if (node.codedata?.node === "ERROR_HANDLER") {
-                // Find the onFailure branch
-                const onFailureBranch = node.branches?.find((branch) => branch.codedata?.node === "ON_FAILURE");
-                if (onFailureBranch) {
-                    // Check if any child nodes in the onFailure branch match the active breakpoint
-                    const hasActiveBreakpointInOnFailure = checkForActiveBreakpointInBranch(onFailureBranch, activeBreakpoint);
-                    if (hasActiveBreakpointInOnFailure) {
-                        errorHandlerIdToExpand = node.id;
-                        return;
-                    }
-                }
-            }
-
-            // Recursively check child nodes
-            if (node.branches) {
-                for (const branch of node.branches) {
-                    if (branch.children) {
-                        for (const child of branch.children) {
-                            checkNode(child);
-                            if (errorHandlerIdToExpand) return;
-                        }
-                    }
-                }
-            }
-        };
-
-        const checkForActiveBreakpointInBranch = (branch: any, activeBreakpoint: any): boolean => {
-            if (branch.children) {
-                for (const child of branch.children) {
-                    // Check if this node matches the active breakpoint
-                    if (child.codedata?.lineRange?.startLine?.line === activeBreakpoint.line) {
-                        return true;
-                    }
-                    // Recursively check nested branches
-                    if (child.branches) {
-                        for (const nestedBranch of child.branches) {
-                            if (checkForActiveBreakpointInBranch(nestedBranch, activeBreakpoint)) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-            return false;
-        };
-
-        // Start checking from the root nodes
-        if (flow.nodes) {
-            for (const child of flow.nodes) {
-                checkNode(child);
-                if (errorHandlerIdToExpand) break;
-            }
-        }
-
-        return errorHandlerIdToExpand;
-    };
-
-    const drawDiagram = (nodes: NodeModel[], links: NodeLinkModel[]) => {
-        const newDiagramModel = new DiagramModel();
-        newDiagramModel.addLayer(new OverlayLayerModel());
-        // add nodes and links to the diagram
-
-        // get code block nodes from nodes
-        const codeBlockNodes = nodes.filter((node) => node.getType() === NodeTypes.CODE_BLOCK_NODE);
-        // get all other nodes
-        const otherNodes = nodes.filter((node) => node.getType() !== NodeTypes.CODE_BLOCK_NODE);
-
-        newDiagramModel.addAll(...codeBlockNodes);
-        newDiagramModel.addAll(...otherNodes, ...links);
-
-        diagramEngine.setModel(newDiagramModel);
-        setDiagramModel(newDiagramModel);
-        registerListeners(diagramEngine);
-
-        diagramEngine.setModel(newDiagramModel);
-        // remove loader overlay layer
-        const overlayLayer = diagramEngine
-            .getModel()
-            .getLayers()
-            .find((layer) => layer instanceof OverlayLayerModel);
-        if (overlayLayer) {
-            diagramEngine.getModel().removeLayer(overlayLayer);
-        }
-
-        if (nodes.length < 3 || !hasDiagramZoomAndPosition(model.fileName)) {
-            resetDiagramZoomAndPosition(model.fileName);
-        }
-        loadDiagramZoomAndPosition(diagramEngine);
-
-        diagramEngine.repaintCanvas();
-        // update the diagram model state
-        setDiagramModel(newDiagramModel);
-    };
 
     const handleCloseComponentPanel = () => {
         setShowComponentPanel(false);
@@ -278,10 +101,6 @@ export function Diagram(props: DiagramProps) {
 
     const handleShowComponentPanel = () => {
         setShowComponentPanel(true);
-    };
-
-    const toggleDiagramFlow = () => {
-        setShowErrorFlow(!showErrorFlow);
     };
 
     const toggleErrorHandlerExpansion = (nodeId: string) => {
@@ -319,34 +138,14 @@ export function Diagram(props: DiagramProps) {
         getProjectPath: getProjectPath
     };
 
-    const getActiveBreakpointNode = (nodes: NodeModel[]): NodeModel => {
-        const node = nodes.find((node) => {
-            const isValidType =
-                node.getType() === NodeTypes.BASE_NODE ||
-                node.getType() === NodeTypes.WHILE_NODE ||
-                node.getType() === NodeTypes.IF_NODE ||
-                node.getType() === NodeTypes.API_CALL_NODE;
-            return isValidType && (node as BaseNodeModel).isActiveBreakpoint();
-        });
-
-        return node;
-    };
-
     return (
-        <>
-            <Controls engine={diagramEngine} />
-            {diagramEngine && diagramModel && (
-                <DiagramContextProvider value={context}>
-                    <DiagramCanvas>
-                        <NavigationWrapperCanvasWidget
-                            diagramEngine={diagramEngine}
-                            focusedNode={getActiveBreakpointNode(diagramModel.getNodes() as NodeModel[])}
-                        />
-                    </DiagramCanvas>
-                </DiagramContextProvider>
-            )}
-        </>
+        <DiagramContextProvider value={context}>
+            <DiagramCore {...props} />
+        </DiagramContextProvider>
     );
 }
 
 export const MemoizedDiagram = memo(Diagram);
+
+// Re-export DiagramCore for direct testing
+export { DiagramCore } from "./DiagramCore";
