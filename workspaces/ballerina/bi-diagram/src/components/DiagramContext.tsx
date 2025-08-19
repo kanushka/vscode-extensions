@@ -65,6 +65,8 @@ export interface DiagramContextState {
     onConnectionSelect?: (connectionName: string) => void;
     goToSource: (node: FlowNode) => void;
     openView: (filePath: string, position: NodePosition) => void;
+    organizationLocation?: string;
+    getProjectPath?: (fileName: string) => Promise<string>;
     agentNode: {
         onModelSelect: (node: FlowNode) => void;
         onAddTool: (node: FlowNode) => void;
@@ -111,6 +113,8 @@ export const DiagramContext = React.createContext<DiagramContextState>({
     addBreakpoint: () => {},
     removeBreakpoint: () => {},
     openView: () => {},
+    organizationLocation: undefined,
+    getProjectPath: () => Promise.resolve(""),
     agentNode: {
         onModelSelect: () => {},
         onAddTool: () => {},

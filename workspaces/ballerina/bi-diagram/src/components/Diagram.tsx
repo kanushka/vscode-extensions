@@ -84,6 +84,8 @@ export interface DiagramProps {
     breakpointInfo?: BreakpointInfo;
     readOnly?: boolean;
     expressionContext?: ExpressionContextProps;
+    organizationLocation?: string;
+    getProjectPath?: (fileName: string) => Promise<string>;
 }
 
 export function Diagram(props: DiagramProps) {
@@ -106,7 +108,9 @@ export function Diagram(props: DiagramProps) {
         removeBreakpoint,
         breakpointInfo,
         readOnly,
-        expressionContext
+        expressionContext,
+        organizationLocation,
+        getProjectPath
     } = props;
 
     const [showErrorFlow, setShowErrorFlow] = useState(false);
@@ -310,7 +314,9 @@ export function Diagram(props: DiagramProps) {
         suggestions: suggestions,
         projectPath: projectPath,
         readOnly: onAddNode === undefined || onDeleteNode === undefined || onNodeSelect === undefined || readOnly,
-        expressionContext: expressionContext
+        expressionContext: expressionContext,
+        organizationLocation: organizationLocation,
+        getProjectPath: getProjectPath
     };
 
     const getActiveBreakpointNode = (nodes: NodeModel[]): NodeModel => {

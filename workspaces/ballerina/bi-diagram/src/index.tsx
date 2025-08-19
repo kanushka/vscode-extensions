@@ -26,6 +26,7 @@ export { AIModelIcon } from "./components/AIModelIcon";
 
 // types
 export type { FlowNodeStyle } from "./utils/types";
+export type { DiagramProps } from "./components/Diagram";
 
 // traversing utils
 export { traverseFlow, traverseNode } from "@wso2/ballerina-core";

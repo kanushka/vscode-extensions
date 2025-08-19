@@ -118,6 +118,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     const [breakpointInfo, setBreakpointInfo] = useState<BreakpointInfo>();
     const [selectedMcpToolkitName, setSelectedMcpToolkitName] = useState<string | undefined>(undefined);
     const [forceUpdate, setForceUpdate] = useState(0);
+    const [organizationLocation, setOrganizationLocation] = useState<string | undefined>(undefined);
 
     // Navigation stack for back navigation
     const [navigationStack, setNavigationStack] = useState<NavigationStackItem[]>([]);
@@ -163,6 +164,17 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                 fetchNodesAndAISuggestions(topNodeRef.current, targetRef.current, false, false);
             }
         });
+
+        const fetchOrganizationLocation = async () => {
+            try {
+                const visualizerLocation = await rpcClient.getVisualizerLocation();
+                setOrganizationLocation(visualizerLocation.org);
+            } catch (error) {
+                console.error('Failed to get organization location:', error);
+            }
+        };
+        
+        fetchOrganizationLocation();
     }, [rpcClient]);
 
     const debouncedGetFlowModel = useCallback(
@@ -1737,6 +1749,15 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
         });
     };
 
+    const getProjectPath = async (fileName: string): Promise<string> => {
+        try {
+            return await rpcClient.getVisualizerRpcClient().joinProjectPath(fileName);
+        } catch (error) {
+            console.error('Failed to get project path:', error);
+            return fileName;
+        }
+    };
+
     const flowModel = originalFlowModel.current && suggestedModel ? suggestedModel : model;
 
     const memoizedDiagramProps = useMemo(
@@ -1770,8 +1791,10 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
             },
             projectPath,
             breakpointInfo,
+            organizationLocation,
+            getProjectPath,
         }),
-        [flowModel, fetchingAiSuggestions, projectPath, breakpointInfo]
+        [flowModel, fetchingAiSuggestions, projectPath, breakpointInfo, organizationLocation]
     );
 
     return (
