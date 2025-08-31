@@ -1,0 +1,26 @@
+# Testing
+coverage/
+*.log
+.nyc_output
+
+# Build outputs
+lib/
+dist/
+build/
+
+# Dependencies
+node_modules/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Rush
+.rush/
+
+# Storybook
+storybook-static/

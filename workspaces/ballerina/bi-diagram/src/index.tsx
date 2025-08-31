@@ -16,7 +16,7 @@
  * under the License.
  */
 import type {} from "@emotion/styled";
-export { Diagram } from "./components/Diagram";
+export { Diagram, DiagramCore } from "./components/Diagram";
 export { MemoizedDiagram } from "./components/Diagram";
 
 // components
