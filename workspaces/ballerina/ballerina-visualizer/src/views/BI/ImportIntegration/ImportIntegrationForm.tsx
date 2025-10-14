@@ -128,6 +128,7 @@ export function ImportIntegrationForm({
                         selectedFile={importSourcePath}
                         onSelect={handleFolderSelection}
                         btnText={importSourcePath ? "Change" : "Select Project"}
+                        appearance="input"
                     />
                 </StepContainer>
             )}

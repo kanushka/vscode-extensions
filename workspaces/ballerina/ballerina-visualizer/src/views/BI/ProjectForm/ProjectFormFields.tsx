@@ -144,10 +144,12 @@ export function ProjectFormFields({ formData, onFormDataChange, onValidationChan
 
             <FieldGroup>
                 <LocationSelector
-                    label="Select Integration Path"
+                    label="Integration Path"
                     selectedFile={formData.path}
                     btnText="Select Path"
                     onSelect={handleProjectDirSelection}
+                    required={true}
+                    appearance="input"
                 />
 
                 <CheckboxContainer>

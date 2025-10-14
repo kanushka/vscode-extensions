@@ -29,6 +29,7 @@ type FileSelectorBaseProps = {
     btnText?: string;
 	required?: boolean;
 	sx?: any;
+    appearance?: 'button' | 'input';
     onSelect: () => void;
 }
 
@@ -58,14 +59,51 @@ const LabelContainer = styled.div<ContainerProps>`
     margin-bottom: 4px;
 `;
 
+const InputContainer = styled.div`
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, transparent);
+    padding: 4px 4px 4px 8px;
+    cursor: pointer;
+    transition: border-color 0.2s;
+
+    &:hover {
+        border-color: var(--vscode-focusBorder);
+    }
+
+    &:focus-within {
+        border-color: var(--vscode-focusBorder);
+        outline: 1px solid var(--vscode-focusBorder);
+        outline-offset: -1px;
+    }
+`;
+
 const PathText = styled.div`
+    font-family: var(--vscode-font-family);
+    color: var(--vscode-input-foreground);
+    flex: 1;
+    font-size: var(--vscode-font-size, 13px);
+    line-height: 1.3;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+
+    &.placeholder {
+        color: var(--vscode-input-placeholderForeground);
+        opacity: 1;
+    }
+`;
+
+const ButtonPathText = styled.div`
     font-family: var(--vscode-editor-font-family);
     padding: 4px 0;
     opacity: 0.8;
 `;
 
 export const LocationSelector: React.FC<FileSelectorProps> = (props: FileSelectorProps) => {
-    const { id, label, required, selectionText, sx, btnText, onSelect, selectedFile } = props;
+    const { id, label, required, selectionText, sx, btnText, onSelect, selectedFile, appearance = 'button' } = props;
 
     return (
         <Container id={id} sx={sx}>
@@ -75,18 +113,46 @@ export const LocationSelector: React.FC<FileSelectorProps> = (props: FileSelecto
                 </div>
                 {(required && label) && (<RequiredFormInput />)}
             </LabelContainer>
-            <PathText>
-                {selectedFile ? <span>{selectedFile}</span> : <div style={{color: "var(--vscode-editor-foreground)"}}>{selectionText}</div>}
-            </PathText>
-            <BrowseBtn appearance="secondary" id="file-selector-btn" onClick={onSelect}>
-                {btnText || "Select Location"}
-            </BrowseBtn>
+            
+            {appearance === 'input' ? (
+                <InputContainer 
+                    onClick={onSelect}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={e => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            onSelect();
+                        }
+                    }}
+                    aria-label={label}
+                >
+                    <PathText className={selectedFile ? "" : "placeholder"}>
+                        {selectedFile || selectionText || ""}
+                    </PathText>
+                    <BrowseBtn appearance="secondary" id="file-selector-btn" onClick={(e: React.MouseEvent) => {
+                        e.stopPropagation();
+                        onSelect();
+                    }}>
+                        {btnText || "Browse..."}
+                    </BrowseBtn>
+                </InputContainer>
+            ) : (
+                <>
+                    <ButtonPathText>
+                        {selectedFile ? <span>{selectedFile}</span> : <div style={{color: "var(--vscode-editor-foreground)"}}>{selectionText}</div>}
+                    </ButtonPathText>
+                    <BrowseBtn appearance="secondary" id="file-selector-btn" onClick={onSelect}>
+                        {btnText || "Select Location"}
+                    </BrowseBtn>
+                </>
+            )}
         </Container>
     );
 };
 
 export const FormLocationSelector = <T extends FieldValues>(props: FormFileSelectorProps<T>) => {
-    const { id, name, control, label, selectionText, btnText, required, onSelect, sx } = props;
+    const { id, name, control, label, selectionText, btnText, required, onSelect, sx, appearance } = props;
     const {
         field: { value, ...rest },
     } = useController<T>({ name, control });
@@ -102,6 +168,7 @@ export const FormLocationSelector = <T extends FieldValues>(props: FormFileSelec
             btnText={btnText}
             required={required}
             sx={sx}
+            appearance={appearance}
             {...rest}
         />
     );
