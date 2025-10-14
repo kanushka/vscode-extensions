@@ -17,17 +17,17 @@
  */
 
 import { useRef, useState } from 'react';
-import { AvailableNode, EVENT_TYPE, FlowNode, LinePosition, ListenerModel } from '@wso2/ballerina-core';
+import { AvailableNode, EVENT_TYPE } from '@wso2/ballerina-core';
 import { View, ViewContent, TextField, Button, Typography } from '@wso2/ui-toolkit';
 import styled from '@emotion/styled';
 import { useRpcContext } from '@wso2/ballerina-rpc-client';
-import { URI, Utils } from "vscode-uri";
 import { TitleBar } from '../../../components/TitleBar';
 import { TopNavigationBar } from '../../../components/TopNavigationBar';
-import { RelativeLoader } from '../../../components/RelativeLoader';
 import { FormHeader } from '../../../components/FormHeader';
 import { getAiModuleOrg, getNodeTemplate } from './utils';
 import { AI, AI_COMPONENT_PROGRESS_MESSAGE_TIMEOUT, BALLERINA, GET_DEFAULT_MODEL_PROVIDER } from '../../../constants';
+import { LoadingOverlayContainer } from '../../styles';
+import { LoadingRing } from '../../../components/Loader';
 
 const FormContainer = styled.div`
     display: flex;
@@ -288,7 +288,11 @@ export function AIChatAgentWizard(props: AIChatAgentWizardProps) {
                                     {isCreating ? <Typography variant="progress">Creating...</Typography> : 'Create'}
                                 </Button>
                             </ButtonContainer>
-                            {isCreating && <RelativeLoader message={steps[currentStep].description} />}
+                            {isCreating && (
+                                <LoadingOverlayContainer>
+                                    <LoadingRing message={steps[currentStep].description} />
+                                </LoadingOverlayContainer>
+                            )}
                         </FormFields>
                     </FormContainer>
                 </Container>
