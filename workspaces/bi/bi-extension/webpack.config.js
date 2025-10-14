@@ -47,7 +47,7 @@ const extensionConfig = {
       }]
     }]
   },
-  devtool: !process.env.CI ? "source-map" : undefined,
+  devtool: process.env.CI ? undefined : "source-map",
   infrastructureLogging: {
     level: "log",
   },
