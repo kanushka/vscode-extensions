@@ -38,11 +38,19 @@ const extensionConfig = {
   module: {
     rules: [{
       test: /\.ts$/,
-      exclude: /node_modules/,
+      include: [
+        path.resolve(__dirname, 'src')
+      ],
+      exclude: [
+        /node_modules/,
+        path.resolve(__dirname, 'src/test'),
+        path.resolve(__dirname, 'src/ui-test')
+      ],
       use: [{
         loader: 'ts-loader',
         options: {
-          logLevel: "info"
+          logLevel: "info",
+          onlyCompileBundledFiles: true
         }
       }]
     }]
