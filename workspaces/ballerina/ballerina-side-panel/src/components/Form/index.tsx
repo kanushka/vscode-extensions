@@ -490,7 +490,13 @@ export const Form = forwardRef((props: FormProps) => {
                 if (isDropdownField(field)) {
                     defaultValues[field.key] = getValueForDropdown(field) ?? "";
                 } else if (field.type === "FLAG") {
-                    defaultValues[field.key] = String(field.value === "true") || String((typeof field.value === "boolean" && field.value));
+                    if (field.types && field.types.length > 1) {
+                        // This is the case where the value can be a boolean or expression. We need to convert it to a string to support expression editor.
+                        defaultValues[field.key] = String(field.value === "true") || String((typeof field.value === "boolean" && field.value));
+                    } else {
+                        // This is the case where the value is only true or false
+                        defaultValues[field.key] = field.value;
+                    }
                 } else if (typeof field.value === "string") {
                     defaultValues[field.key] = formatJSONLikeString(field.value) ?? "";
                 } else {
