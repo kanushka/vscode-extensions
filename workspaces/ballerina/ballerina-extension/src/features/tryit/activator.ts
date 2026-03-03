@@ -17,20 +17,23 @@
  */
 
 import { commands, window, workspace, FileSystemWatcher, Disposable, Uri } from "vscode";
-import { clearTerminal, PALETTE_COMMANDS } from "../project/cmds/cmd-runner";
+import { clearTerminal, MESSAGES, PALETTE_COMMANDS } from "../project/cmds/cmd-runner";
 import * as fs from 'fs';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { BallerinaExtension } from "src/core";
 import Handlebars from "handlebars";
 import { clientManager, findRunningBallerinaProcesses, handleError, HTTPYAC_CONFIG_TEMPLATE, TRYIT_TEMPLATE, waitForBallerinaService } from "./utils";
-import { BIDesignModelResponse, OpenAPISpec } from "@wso2/ballerina-core";
+import { BIDesignModelResponse, EVENT_TYPE, MACHINE_VIEW, OpenAPISpec, ProjectInfo } from "@wso2/ballerina-core";
 import { getProjectWorkingDirectory } from "../../utils/file-utils";
 import { startDebugging } from "../editor-support/activator";
 import { v4 as uuidv4 } from "uuid";
 import { createGraphqlView } from "../../views/graphql";
-import { StateMachine } from "../../stateMachine";
-import { getCurrentProjectRoot } from "../debugger";
+import { openView, StateMachine } from "../../stateMachine";
+import { getCurrentProjectRoot } from "../../utils/project-utils";
+import { requiresPackageSelection, selectPackageOrPrompt } from "../../utils/command-utils";
+import { VisualizerWebview } from "../../views/visualizer/webview";
+import { TracerMachine } from "../tracing";
 
 // File constants
 const FILE_NAMES = {
@@ -40,6 +43,14 @@ const FILE_NAMES = {
 };
 
 let errorLogWatcher: FileSystemWatcher | undefined;
+
+// Store session IDs by chat endpoint to maintain sessions across reopenings
+const chatSessionMap: Map<string, string> = new Map();
+
+// Export a function to update the session ID for an endpoint (used when clearing chat)
+export function updateChatSessionId(endpoint: string, newSessionId: string): void {
+    chatSessionMap.set(endpoint, newSessionId);
+}
 
 export function activateTryItCommand(ballerinaExtInstance: BallerinaExtension) {
     try {
@@ -68,33 +79,17 @@ async function openTryItView(withNotice: boolean = false, resourceMetadata?: Res
             throw new Error('Ballerina Language Server is not connected');
         }
 
-        let projectPath = StateMachine.context().projectUri;
-        if (!projectPath) {
-            const currentProjectRoot = await getCurrentProjectRoot();
-            if (!currentProjectRoot) {
-                throw new Error('Please open a workspace first');
-            }
-            // If currentProjectRoot is a file (single file project), use its directory
-            // Otherwise, use the current project root
-            try {
-                projectPath = getProjectWorkingDirectory(currentProjectRoot);
-            } catch (error) {
-                throw new Error(`Failed to determine working directory`);
-            }
-        }
+        const projectAndServices = await getProjectPathAndServices(serviceMetadata, filePath);
 
-        let services: ServiceInfo[] | null = await getAvailableServices(projectPath);
-
-        // if the getDesignModel() LS API is unavailable, create a ServiceInfo from ServiceMetadata to support Try It functionality. (a fallback logic for Ballerina versions prior to 2201.12.x)
-        if (services == null && serviceMetadata && filePath) {
-            const service = createServiceInfoFromMetadata(serviceMetadata, projectPath, filePath);
-            services = [service];
-        }
-
-        if (!services || services.length === 0) {
-            vscode.window.showInformationMessage('No services found in the project');
+        if (!projectAndServices) {
             return;
         }
+
+        const { projectPath, services } = projectAndServices;
+
+        // Check if service is already running BEFORE we potentially start it
+        // This will be used to determine if we should reuse the session ID for AI Agent service
+        let wasServiceAlreadyRunning = await isServiceAlreadyRunning(projectPath);
 
         if (withNotice) {
             const selection = await vscode.window.showInformationMessage(
@@ -106,6 +101,8 @@ async function openTryItView(withNotice: boolean = false, resourceMetadata?: Res
             if (selection !== "Test") {
                 return;
             }
+
+            wasServiceAlreadyRunning = false;
         } else {
             const processesRunning = await checkBallerinaProcessRunning(projectPath);
             if (!processesRunning) {
@@ -185,10 +182,13 @@ async function openTryItView(withNotice: boolean = false, resourceMetadata?: Res
 
             await openMcpInspector(serviceUrl);
         } else {
+            // AI Agent service - start the tracing server if enabled
+            TracerMachine.startServer();
+
             const selectedPort: number = await getServicePort(projectPath, selectedService);
             selectedService.port = selectedPort;
 
-            await openChatView(selectedService.basePath, selectedPort.toString());
+            await openChatView(selectedService.basePath, selectedPort.toString(), wasServiceAlreadyRunning);
         }
 
         // Setup the error log watcher
@@ -221,7 +221,7 @@ async function openInSplitView(fileUri: vscode.Uri, editorType: string = 'defaul
     }
 }
 
-async function openChatView(basePath: string, port: string) {
+async function openChatView(basePath: string, port: string, wasServiceAlreadyRunning: boolean) {
     try {
         const baseUrl = `http://localhost:${port}`;
         const chatPath = "chat";
@@ -230,11 +230,32 @@ async function openChatView(basePath: string, port: string) {
         const cleanedServiceEp = serviceEp.pathname.replace(/\/$/, '') + "/" + chatPath.replace(/^\//, '');
         const chatEp = new URL(cleanedServiceEp, serviceEp.origin);
 
-        const sessionId = uuidv4();
+        const chatEndpoint = chatEp.href;
 
-        commands.executeCommand("ballerina.open.agent.chat", { chatEp: chatEp.href, chatSessionId: sessionId });
+        let sessionId: string;
+
+        if (!wasServiceAlreadyRunning) {
+            // Service was just started - generate a new session ID for a fresh start
+            sessionId = uuidv4();
+            chatSessionMap.set(chatEndpoint, sessionId);
+        } else {
+            // Service was already running - reuse existing session ID if available, or create new
+            sessionId = chatSessionMap.get(chatEndpoint) || uuidv4();
+            chatSessionMap.set(chatEndpoint, sessionId);
+        }
+
+        commands.executeCommand("ballerina.open.agent.chat", { chatEp: chatEndpoint, chatSessionId: sessionId });
     } catch (error) {
         vscode.window.showErrorMessage(`Failed to call Chat-Agent: ${error}`);
+    }
+}
+
+async function isServiceAlreadyRunning(projectDir: string): Promise<boolean> {
+    try {
+        const balProcesses = await findRunningBallerinaProcesses(projectDir);
+        return balProcesses && balProcesses.length > 0;
+    } catch (error) {
+        return false;
     }
 }
 
@@ -304,7 +325,6 @@ async function findServiceForResource(services: ServiceInfo[], resourceMetadata:
 
 async function getAvailableServices(projectDir: string): Promise<ServiceInfo[] | null> {
     try {
-        // const langClient = clientManager.getClient();
         const langClient = StateMachine.langClient();
 
         const response: BIDesignModelResponse = await langClient.getDesignModel({
@@ -473,6 +493,8 @@ async function getOpenAPIDefinition(service: ServiceInfo): Promise<OAISpec> {
 
         if (openapiDefinitions === 'NOT_SUPPORTED_TYPE') {
             throw new Error(`OpenAPI spec generation failed for the service with base path: '${service.basePath}'`);
+        } else if (openapiDefinitions.error) {
+            throw new Error(openapiDefinitions.error);
         }
 
         const matchingDefinition = (openapiDefinitions as OpenAPISpec).content?.filter(content =>
@@ -565,13 +587,30 @@ async function checkBallerinaProcessRunning(projectDir: string): Promise<boolean
             });
 
         if (!balProcesses?.length) {
+            const { workspacePath, view: webviewType, projectInfo } = StateMachine.context();
+            let projectName: string;
+
+            if (workspacePath && projectInfo && projectInfo.children?.length > 0) {
+                const project = projectInfo.children.find((child: ProjectInfo) => child.projectPath === projectDir);
+                projectName = project?.title || project?.name || '';
+            }
+
             const selection = await vscode.window.showWarningMessage(
-                'The "Try It" feature requires a running Ballerina service. Would you like to run the integration first?',
+                `The "Try It" feature requires a running Ballerina service.
+                Would you like to run ${projectName ? `'${projectName}'` : 'the integration'} now?`,
                 'Run Integration',
                 'Cancel'
             );
 
             if (selection === 'Run Integration') {
+                const isWebviewOpen = VisualizerWebview.currentPanel !== undefined;
+                const needsPackageSelection = requiresPackageSelection(workspacePath, webviewType, projectDir, isWebviewOpen, false);
+
+                // Open the package overview view if the command is executed from workspace overview
+                if (isWebviewOpen && needsPackageSelection) {
+                    openView(EVENT_TYPE.OPEN_VIEW, { view: MACHINE_VIEW.PackageOverview, projectPath: projectDir });
+                }
+
                 // Execute the run command
                 clearTerminal();
                 await startDebugging(Uri.file(projectDir), false, false, true);
@@ -1119,4 +1158,93 @@ function createServiceInfoFromMetadata(serviceMetadata: ServiceMetadata, workspa
             port: listenerPort
         }
     };
+}
+
+async function getProjectRoots(): Promise<string[]> {
+    const context = StateMachine.context();
+    const { workspacePath, view: webviewType, projectPath, projectInfo } = context;
+    const isWebviewOpen = VisualizerWebview.currentPanel !== undefined;
+    const hasActiveTextEditor = !!window.activeTextEditor;
+
+    if (requiresPackageSelection(workspacePath, webviewType, projectPath, isWebviewOpen, hasActiveTextEditor)) {
+        return projectInfo?.children.map((child: any) => child.projectPath) ?? [];
+    }
+
+    const currentRoot = await getCurrentProjectRoot();
+    return currentRoot ? [currentRoot] : [];
+}
+
+async function getProjectPathAndServices(
+    serviceMetadata?: ServiceMetadata,
+    filePath?: string
+): Promise<{ projectPath: string, services: ServiceInfo[] } | undefined> {
+    const currentProjectRoots = await getProjectRoots();
+    if (!currentProjectRoots || currentProjectRoots.length === 0) {
+        throw new Error(MESSAGES.NO_PROJECT_FOUND);
+    }
+
+    let projectPath: string;
+    const serviceInfos: Record<string, ServiceInfo[]> = {};
+
+    if (currentProjectRoots.length === 1) {
+        // If currentProjectRoot is a file (single file project), use its directory
+        // Otherwise, use the current project root
+        try {
+            const root = currentProjectRoots[0];
+            projectPath = getProjectWorkingDirectory(root);
+            const services = await getServiceInfo(projectPath, serviceMetadata, filePath);
+            if (!services || services.length === 0) {
+                return;
+            }
+            serviceInfos[projectPath] = services;
+        } catch (error) {
+            throw new Error(`Failed to determine working directory`);
+        }
+    } else {
+        for (const projectRoot of currentProjectRoots) {
+            const services = await getServiceInfo(projectRoot, serviceMetadata, filePath);
+            if (services && services.length > 0) {
+                serviceInfos[projectRoot] = services;
+            }
+        }
+
+        if (Object.keys(serviceInfos).length === 0) {
+            vscode.window.showInformationMessage('None of the integrations contain services');
+            return;
+        }
+        if (Object.keys(serviceInfos).length === 1) {
+            projectPath = Object.keys(serviceInfos)[0];
+        }
+        if (Object.keys(serviceInfos).length > 1) {
+            const selectedProjectRoot = await selectPackageOrPrompt(
+                Object.keys(serviceInfos),
+                "Multiple integrations contain services. Please select one."
+            );
+            if (!selectedProjectRoot) {
+                return;
+            }
+
+            await StateMachine.updateProjectRootAndInfo(selectedProjectRoot, StateMachine.context().projectInfo);
+            projectPath = selectedProjectRoot;
+        }
+    }
+
+    return { projectPath: projectPath, services: serviceInfos[projectPath] };
+}
+
+async function getServiceInfo(
+    projectPath: string,
+    serviceMetadata?: ServiceMetadata,
+    filePath?: string
+): Promise<ServiceInfo[]> {
+    let services: ServiceInfo[] | null = await getAvailableServices(projectPath);
+
+    // if the getDesignModel() LS API is unavailable, create a ServiceInfo from ServiceMetadata
+    // to support Try It functionality. (a fallback logic for Ballerina versions prior to 2201.12.x)
+    if (services == null && serviceMetadata && filePath) {
+        const service = createServiceInfoFromMetadata(serviceMetadata, projectPath, filePath);
+        services = [service];
+    }
+
+    return services;
 }

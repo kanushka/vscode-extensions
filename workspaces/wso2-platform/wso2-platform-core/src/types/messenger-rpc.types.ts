@@ -60,6 +60,7 @@ export const ViewRuntimeLogs: RequestType<ViewRuntimeLogsReq, void> = { method: 
 export const TriggerGithubAuthFlow: RequestType<string, void> = { method: "triggerGithubAuthFlow" };
 export const TriggerGithubInstallFlow: RequestType<string, void> = { method: "triggerGithubInstallFlow" };
 export const SubmitComponentCreate: RequestType<SubmitComponentCreateReq, ComponentKind> = { method: "submitComponentCreate" };
+export const SubmitBatchComponentCreate: RequestType<SubmitBatchComponentCreateReq, SubmitBatchComponentCreateResp> = { method: "submitBatchComponentCreate" };
 export const GetDirectoryFileNames: RequestType<string, string[]> = { method: "getDirectoryFileNames" };
 export const FileExists: RequestType<string, boolean> = { method: "fileExists" };
 export const ReadFile: RequestType<string, string | null> = { method: "readFile" };
@@ -76,6 +77,7 @@ export const CreateLocalEndpointsConfig: RequestType<CreateLocalEndpointsConfigR
 export const CreateLocalProxyConfig: RequestType<CreateLocalProxyConfigReq, void> = { method: "createLocalProxyConfig" };
 export const CreateLocalConnectionsConfig: RequestType<CreateLocalConnectionsConfigReq, void> = { method: "createLocalConnectionsConfig" };
 export const DeleteLocalConnectionsConfig: RequestType<DeleteLocalConnectionsConfigReq, void> = { method: "deleteLocalConnectionsConfig" };
+export const CloneRepositoryIntoCompDir: RequestType<CloneRepositoryIntoCompDirReq, string> = { method: "cloneRepositoryIntoCompDir" };
 
 const NotificationMethods = {
 	onAuthStateChanged: "onAuthStateChanged",
@@ -103,12 +105,51 @@ export interface OpenTestViewReq {
 	endpoints: ComponentEP[];
 }
 
+export interface CloneRepositoryIntoCompDirReq {
+	cwd: string;
+	subpath: string;
+	org: Organization;
+	componentName: string;
+	repo: {
+		provider: string;
+		orgName: string;
+		orgHandler: string;
+		repo: string;
+		serverUrl?: string;
+		branch: string;
+		secretRef: string;
+		isBareRepo: boolean;
+	};
+}
+
 export interface SubmitComponentCreateReq {
 	org: Organization;
 	project: Project;
 	createParams: CreateComponentReq;
 	autoBuildOnCommit?: boolean;
 	type: string;
+}
+
+/** Request for batch component creation */
+export interface SubmitBatchComponentCreateReq {
+	org: Organization;
+	project: Project;
+	/** Array of component creation requests */
+	components: Array<{
+		createParams: CreateComponentReq;
+		autoBuildOnCommit?: boolean;
+		type: string;
+	}>;
+}
+
+/** Response for batch component creation */
+export interface SubmitBatchComponentCreateResp {
+	/** Successfully created components */
+	created: ComponentKind[];
+	/** Failed component names with error messages */
+	failed: Array<{ name: string; error: string }>;
+	/** Total components attempted */
+	total: number;
 }
 
 export interface CreateLocalEndpointsConfigReq {

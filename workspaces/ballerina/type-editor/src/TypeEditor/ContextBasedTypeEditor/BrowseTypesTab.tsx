@@ -20,7 +20,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import styled from '@emotion/styled';
 import { Button, TextField, Typography, ProgressRing, Codicon } from '@wso2/ui-toolkit';
 import { TypeHelperCategory, TypeHelperItem } from '../../TypeHelper';
-import { Type } from '@wso2/ballerina-core';
+import { Type, AddImportItemResponse, Imports } from '@wso2/ballerina-core';
 import { ContentBody, StickyFooterContainer, FloatingFooter } from './ContextTypeEditor';
 
 
@@ -28,6 +28,20 @@ const SearchContainer = styled.div`
     width: 100%;
     margin-bottom: 8px;
     margin-top: 5px;
+`;
+
+const InfoBanner = styled.div`
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+    background-color: var(--vscode-textCodeBlock-background);
+    border-radius: 4px;
+    margin-bottom: 12px;
+`;
+
+const InfoText = styled(Typography)`
+    color: var(--vscode-descriptionForeground);
 `;
 
 const CategorySection = styled.div`
@@ -135,8 +149,9 @@ interface BrowseTypesTabProps {
     loading?: boolean;
     onSearchTypeHelper: (searchText: string, isType?: boolean) => void;
     onTypeItemClick: (item: TypeHelperItem) => Promise<any>;
-    onTypeSelect: (type: Type) => void;
+    onTypeSelect: (type: Type, imports?: Imports) => void;
     simpleType?: string;
+    note?: string;
 }
 
 export function BrowseTypesTab(props: BrowseTypesTabProps) {
@@ -147,7 +162,8 @@ export function BrowseTypesTab(props: BrowseTypesTabProps) {
         onSearchTypeHelper,
         onTypeItemClick,
         onTypeSelect,
-        simpleType
+        simpleType,
+        note
     } = props;
 
     const firstRender = useRef<boolean>(true);
@@ -188,14 +204,18 @@ export function BrowseTypesTab(props: BrowseTypesTabProps) {
 
         setIsSelecting(true);
         try {
-            const response = await onTypeItemClick(selectedType);
+            const response = await onTypeItemClick(selectedType) as AddImportItemResponse;
+
+            // Use template from response which includes module prefix for imported types
+            // For non-imported types, template will be the same as the type name
+            const typeName = response?.template || selectedType.name;
 
             // Create a Type object from the selected item
             const type: Type = {
-                name: selectedType.name,
+                name: typeName,
                 editable: false,
                 metadata: {
-                    label: selectedType.name,
+                    label: typeName,
                     description: selectedType.labelDetails?.description || '',
                 },
                 codedata: selectedType.codedata as any,
@@ -204,7 +224,15 @@ export function BrowseTypesTab(props: BrowseTypesTabProps) {
                 includes: []
             };
 
-            onTypeSelect(type);
+            // If this is an imported type, update imports before saving
+            if (response?.prefix && response?.moduleId) {
+                const importStatement: Imports = {
+                    [response.prefix]: response.moduleId
+                };
+                onTypeSelect(type, importStatement);
+            } else {
+                onTypeSelect(type);
+            }
         } catch (error) {
             console.error('Error selecting type:', error);
         } finally {
@@ -332,6 +360,12 @@ export function BrowseTypesTab(props: BrowseTypesTabProps) {
     return (
         <StickyFooterContainer>
             <ContentBody>
+                {note && (
+                    <InfoBanner>
+                        <Codicon name="info" />
+                        <InfoText variant="body3">{note}</InfoText>
+                    </InfoBanner>
+                )}
                 <SearchContainer>
                     <TextField
                         value={searchText}
@@ -367,4 +401,3 @@ export function BrowseTypesTab(props: BrowseTypesTabProps) {
         </StickyFooterContainer>
     );
 }
-

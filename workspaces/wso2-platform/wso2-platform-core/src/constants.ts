@@ -22,8 +22,10 @@ export const CommandIds = {
 	SignIn: "wso2.wso2-platform.sign.in",
 	SignInWithAuthCode: "wso2.wso2-platform.sign.in.with.authCode",
 	SignOut: "wso2.wso2-platform.sign.out",
+	CancelSignIn: "wso2.wso2-platform.cancel.sign.in",
 	AddComponent: "wso2.wso2-platform.add.component",
 	CreateNewComponent: "wso2.wso2-platform.create.component",
+	CreateMultipleNewComponents: "wso2.wso2-platform.create.multiple.components",
 	DeleteComponent: "wso2.wso2-platform.delete.component",
 	OpenInConsole: "wso2.wso2-platform.open.external",
 	ViewComponent: "wso2.wso2-platform.component.view",
@@ -35,6 +37,7 @@ export const CommandIds = {
 	CreateComponentDependency: "wso2.wso2-platform.component.create.dependency",
 	ViewDependency: "wso2.wso2-platform.component.view.dependency",
 	OpenCompSrcDir: "wso2.wso2-platform.open.component.src",
+	CommitAndPushToGit: "wso2.wso2-platform.push-to-git",
 	// TODO: add command & code lens to delete dependency
 };
 

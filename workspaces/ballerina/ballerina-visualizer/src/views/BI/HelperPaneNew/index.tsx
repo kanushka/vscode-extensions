@@ -21,21 +21,23 @@ import { RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ExpandableList } from './Components/ExpandableList';
 import { Variables } from './Views/Variables';
 import { Inputs } from './Views/Inputs';
-import { CompletionInsertText, DataMapperDisplayMode, ExpressionProperty, FlowNode, LineRange, RecordTypeField } from '@wso2/ballerina-core';
-import { CompletionItem, FormExpressionEditorRef, HelperPaneCustom, HelperPaneHeight, Typography } from '@wso2/ui-toolkit';
+import { Documents } from './Views/Documents';
+import { DocumentConfig } from './Views/DocumentConfig';
+import { CompletionInsertText, EditorConfig, ExpressionProperty, FlowNode, getPrimaryInputType, InputType, LineRange, RecordTypeField } from '@wso2/ballerina-core';
+import { CompletionItem, HelperPaneCustom, HelperPaneHeight, Typography } from '@wso2/ui-toolkit';
 import { SlidingPane, SlidingPaneHeader, SlidingPaneNavContainer, SlidingWindow } from '@wso2/ui-toolkit';
 import { CreateValue } from './Views/CreateValue';
 import { FunctionsPage } from './Views/Functions';
 import { FormSubmitOptions } from '../FlowDiagram';
 import { Configurables } from './Views/Configurables';
+import { DevantConfigurables } from './Views/DevantConfigurables';
 import styled from '@emotion/styled';
-import { ConfigureRecordPage } from './Views/RecordConfigModal';
-import { POPUP_IDS, useModalStack } from '../../../Context';
+import { useModalStack } from '../../../Context';
 import { getDefaultValue } from './utils/types';
-import { EXPR_ICON_WIDTH } from '@wso2/ui-toolkit';
 import { HelperPaneIconType, getHelperPaneIcon } from './utils/iconUtils';
-import { HelperpaneOnChangeOptions } from '@wso2/ballerina-side-panel';
+import { ExpressionEditorDevantProps, HelperpaneOnChangeOptions, InputMode } from '@wso2/ballerina-side-panel';
 
+const AI_PROMPT_TYPE = "ai:Prompt";
 
 export type ValueCreationOption = {
     typeCheck: string | null;
@@ -58,14 +60,16 @@ export type HelperPaneNewProps = {
     isAssignIdentifier?: boolean;
     completions: CompletionItem[],
     projectPath?: string,
-    handleOnFormSubmit?: (updatedNode?: FlowNode, dataMapperMode?: DataMapperDisplayMode, options?: FormSubmitOptions) => void
+    handleOnFormSubmit?: (updatedNode?: FlowNode, editorConfig?: EditorConfig, options?: FormSubmitOptions) => void
     selectedType?: CompletionItem;
     filteredCompletions?: CompletionItem[];
     isInModal?: boolean;
-    valueTypeConstraint?: string;
+    types?: InputType[];
     forcedValueTypeConstraint?: string;
     handleRetrieveCompletions: (value: string, property: ExpressionProperty, offset: number, triggerCharacter?: string) => Promise<void>;
     handleValueTypeConstChange: (valueTypeConstraint: string) => void;
+    inputMode?: InputMode;
+    devantExpressionEditor?: ExpressionEditorDevantProps;
 };
 
 const TitleContainer = styled.div`
@@ -88,24 +92,26 @@ const HelperPaneNewEl = ({
     selectedType,
     filteredCompletions,
     isInModal,
-    valueTypeConstraint,
+    types,
     handleRetrieveCompletions,
     forcedValueTypeConstraint,
-    handleValueTypeConstChange
+    handleValueTypeConstChange,
+    inputMode,
+    devantExpressionEditor,
 }: HelperPaneNewProps) => {
     const [selectedItem, setSelectedItem] = useState<number>();
-    const currentMenuItemCount = valueTypeConstraint ? 5 : 4
-
-    const { addModal } = useModalStack()
+    const currentMenuItemCount = types ?
+        (forcedValueTypeConstraint?.includes(AI_PROMPT_TYPE) ? 6 : 5) :
+        (forcedValueTypeConstraint?.includes(AI_PROMPT_TYPE) ? 5 : 4)
 
     // Create refs array for all menu items
     const menuItemRefs = useRef<(HTMLDivElement | null)[]>([]);
 
     useEffect(() => {
-        if (valueTypeConstraint?.length > 0) {
-            handleValueTypeConstChange(valueTypeConstraint)
+        if (types?.length > 0) {
+            handleValueTypeConstChange(getPrimaryInputType(types)?.ballerinaType);
         }
-    }, [valueTypeConstraint, forcedValueTypeConstraint])
+    }, [types, forcedValueTypeConstraint])
 
     const ifCTRLandUP = (e: KeyboardEvent) => {
         return (
@@ -162,13 +168,6 @@ const HelperPaneNewEl = ({
             return insertText;
         }
         return insertText.value;
-    };
-
-    const getCursorOffset = (insertText: string | CompletionInsertText): number => {
-        if (typeof insertText === 'string') {
-            return 0;
-        }
-        return insertText.cursorOffset ?? 0;
     };
 
     const handleChange = (insertText: string | CompletionInsertText, isRecordConfigureChange?: boolean, shouldKeepHelper?: boolean) => {
@@ -253,22 +252,6 @@ const HelperPaneNewEl = ({
         )
     ];
 
-    const openRecordConfigView = () => {
-        addModal(
-            <div style={{ padding: '10px 10px' }}>
-                <ConfigureRecordPage
-                    fileName={fileName}
-                    targetLineRange={targetLineRange}
-                    onChange={handleChange}
-                    currentValue={currentValue}
-                    recordTypeField={recordTypeField}
-                    onClose={onClose}
-                />
-            </div>
-            , POPUP_IDS.RECORD_CONFIG, "Record Configuration", 600, 500);
-        onClose();
-    }
-
     return (
         <HelperPaneCustom anchorRef={anchorRef}>
             <HelperPaneCustom.Body>
@@ -276,35 +259,21 @@ const HelperPaneNewEl = ({
                     <SlidingPane name="PAGE1" paneWidth={300} paneHeight='170px'>
                         <div style={{ padding: '8px 0px' }}>
                             <ExpandableList >
-
-                                {((forcedValueTypeConstraint && forcedValueTypeConstraint.length > 0)) && (
-                                    recordTypeField ?
-                                        <SlidingPaneNavContainer onClick={openRecordConfigView}>
-                                            <ExpandableList.Item>
-                                                {getHelperPaneIcon(HelperPaneIconType.VALUE)}
-                                                <Typography variant="body3" sx={{ fontWeight: 600 }}>
-                                                    Create value
-                                                </Typography>
-                                            </ExpandableList.Item>
-                                        </SlidingPaneNavContainer> :
-                                        <>
-                                            {valueCreationOptions.length > 0 && (
-                                                <SlidingPaneNavContainer
-                                                    ref={el => menuItemRefs.current[0] = el}
-                                                    to="CREATE_VALUE"
-                                                    data={recordTypeField}
-                                                >
-                                                    <ExpandableList.Item>
-                                                        {getHelperPaneIcon(HelperPaneIconType.VALUE)}
-                                                        <Typography variant="body3" sx={{ fontWeight: 600 }}>
-                                                            Create Value
-                                                        </Typography>
-                                                    </ExpandableList.Item>
-                                                </SlidingPaneNavContainer>
-                                            )}</>
+                                {devantExpressionEditor && (
+                                    <SlidingPaneNavContainer
+                                        ref={el => menuItemRefs.current[0] = el}
+                                        to="DEVANT_CONFIGS"
+                                    >
+                                        <ExpandableList.Item>
+                                            {getHelperPaneIcon(HelperPaneIconType.CONFIGURABLE)}
+                                            <Typography variant="body3" sx={{ fontWeight: 600 }}>
+                                                Devant Configs
+                                            </Typography>
+                                        </ExpandableList.Item>
+                                    </SlidingPaneNavContainer>
                                 )}
                                 <SlidingPaneNavContainer
-                                    ref={el => menuItemRefs.current[2] = el}
+                                    ref={el => menuItemRefs.current[3] = el}
                                     to="INPUTS"
                                 >
                                     <ExpandableList.Item>
@@ -315,7 +284,7 @@ const HelperPaneNewEl = ({
                                     </ExpandableList.Item>
                                 </SlidingPaneNavContainer>
                                 <SlidingPaneNavContainer
-                                    ref={el => menuItemRefs.current[1] = el}
+                                    ref={el => menuItemRefs.current[2] = el}
                                     to="VARIABLES"
                                 >
                                     <ExpandableList.Item>
@@ -324,9 +293,9 @@ const HelperPaneNewEl = ({
                                             Variables
                                         </Typography>
                                     </ExpandableList.Item>
-                                </SlidingPaneNavContainer>                                
+                                </SlidingPaneNavContainer>
                                 <SlidingPaneNavContainer
-                                    ref={el => menuItemRefs.current[3] = el}
+                                    ref={el => menuItemRefs.current[4] = el}
                                     to="CONFIGURABLES"
                                 >
                                     <ExpandableList.Item>
@@ -339,7 +308,7 @@ const HelperPaneNewEl = ({
                                     </ExpandableList.Item>
                                 </SlidingPaneNavContainer>
                                 <SlidingPaneNavContainer
-                                    ref={el => menuItemRefs.current[4] = el}
+                                    ref={el => menuItemRefs.current[5] = el}
                                     to="FUNCTIONS"
                                 >
                                     <ExpandableList.Item>
@@ -349,6 +318,19 @@ const HelperPaneNewEl = ({
                                         </Typography>
                                     </ExpandableList.Item>
                                 </SlidingPaneNavContainer>
+                                {forcedValueTypeConstraint?.includes(AI_PROMPT_TYPE) && (
+                                    <SlidingPaneNavContainer
+                                        ref={el => menuItemRefs.current[6] = el}
+                                        to="DOCUMENTS"
+                                    >
+                                        <ExpandableList.Item>
+                                            {getHelperPaneIcon(HelperPaneIconType.DOCUMENT)}
+                                            <Typography variant="body3" sx={{ fontWeight: 600 }}>
+                                                Documents
+                                            </Typography>
+                                        </ExpandableList.Item>
+                                    </SlidingPaneNavContainer>
+                                )}
                             </ExpandableList>
 
                         </div>
@@ -372,6 +354,7 @@ const HelperPaneNewEl = ({
                             isInModal={isInModal}
                             handleRetrieveCompletions={handleRetrieveCompletions}
                             onClose={onClose}
+                            inputMode={inputMode}
                         />
                     </SlidingPane>
 
@@ -388,8 +371,25 @@ const HelperPaneNewEl = ({
                             filteredCompletions={filteredCompletions}
                             currentValue={currentValue}
                             handleRetrieveCompletions={handleRetrieveCompletions}
+                            inputMode={inputMode}
                         />
                     </SlidingPane>
+
+                    {devantExpressionEditor && (
+                        <SlidingPane name="DEVANT_CONFIGS" paneWidth={300}>
+                            <SlidingPaneHeader> Devant Configs</SlidingPaneHeader>
+                            <DevantConfigurables
+                                anchorRef={anchorRef}
+                                fileName={fileName}
+                                onChange={handleChange}
+                                targetLineRange={targetLineRange}
+                                isInModal={isInModal}
+                                onClose={onClose}
+                                inputMode={inputMode}
+                                devantExpressionEditor={devantExpressionEditor}
+                            />
+                        </SlidingPane>
+                    )}
 
                     <SlidingPane name="CREATE_VALUE" paneWidth={300}>
                         <SlidingPaneHeader> Create Value</SlidingPaneHeader>
@@ -397,7 +397,7 @@ const HelperPaneNewEl = ({
                             fileName={fileName}
                             onChange={handleChange}
                             currentValue={currentValue}
-                            selectedType={valueTypeConstraint || forcedValueTypeConstraint || ''}
+                            selectedType={getPrimaryInputType(types)?.ballerinaType || forcedValueTypeConstraint || ''}
                             recordTypeField={recordTypeField}
                             valueCreationOptions={valueCreationOptions}
                             anchorRef={anchorRef} />
@@ -415,7 +415,8 @@ const HelperPaneNewEl = ({
                             onClose={onClose}
                             onChange={handleChange}
                             updateImports={updateImports}
-                            selectedType={selectedType} />
+                            selectedType={selectedType}
+                            inputMode={inputMode} />
                     </SlidingPane>
 
                     <SlidingPane name="CONFIGURABLES" paneWidth={300}>
@@ -429,6 +430,32 @@ const HelperPaneNewEl = ({
                             targetLineRange={targetLineRange}
                             isInModal={isInModal}
                             onClose={onClose}
+                            inputMode={inputMode}
+                            excludedConfigs={devantExpressionEditor?.devantConfigs || []}
+                        />
+                    </SlidingPane>
+
+                    {/* Documents Page */}
+                    <SlidingPane name="DOCUMENTS" paneWidth={300}>
+                        <SlidingPaneHeader>
+                            Documents
+                        </SlidingPaneHeader>
+                        <Documents />
+                    </SlidingPane>
+
+                    {/* Single Document Configuration Page - handles all document types */}
+                    <SlidingPane name="DOCUMENT_CONFIG" paneWidth={300}>
+                        <SlidingPaneHeader>
+                            Documents
+                        </SlidingPaneHeader>
+                        <DocumentConfig
+                            onChange={handleChange}
+                            onClose={onClose}
+                            targetLineRange={targetLineRange}
+                            filteredCompletions={filteredCompletions || []}
+                            currentValue={currentValue}
+                            handleRetrieveCompletions={handleRetrieveCompletions}
+                            inputMode={inputMode}
                         />
                     </SlidingPane>
                 </SlidingWindow>
@@ -477,7 +504,7 @@ export const getHelperPaneNew = (props: HelperPaneNewProps) => {
         selectedType,
         filteredCompletions,
         isInModal,
-        valueTypeConstraint,
+        types,
         forcedValueTypeConstraint,
         handleValueTypeConstChange,
     } = props;
@@ -502,10 +529,12 @@ export const getHelperPaneNew = (props: HelperPaneNewProps) => {
             selectedType={selectedType}
             filteredCompletions={filteredCompletions}
             isInModal={isInModal}
-            valueTypeConstraint={valueTypeConstraint}
+            types={types}
             handleRetrieveCompletions={props.handleRetrieveCompletions}
             forcedValueTypeConstraint={forcedValueTypeConstraint}
             handleValueTypeConstChange={handleValueTypeConstChange}
+            inputMode={props.inputMode}
+            devantExpressionEditor={props.devantExpressionEditor}
         />
     );
 };

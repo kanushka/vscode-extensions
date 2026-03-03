@@ -92,6 +92,7 @@ import { TextEdit } from "vscode-languageclient";
 import { downloadJavaFromMI, downloadMI, getProjectSetupDetails, getSupportedMIVersionsHigherThan, setPathsInWorkSpace, updateRuntimeVersionsInPom, getMIVersionFromPom } from '../../util/onboardingUtils';
 import { extractCAppDependenciesAsProjects } from "../../visualizer/activate";
 import { findMultiModuleProjectsInWorkspaceDir } from "../../util/migrationUtils";
+import { MILanguageClient } from "../../lang-client/activator";
 
 Mustache.escape = escapeXml;
 
@@ -145,7 +146,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async getProjectStructure(params: ProjectStructureRequest): Promise<ProjectStructureResponse> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
 
             const res = await langClient.getProjectStructure(this.projectUri);
             resolve(res);
@@ -154,7 +155,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async getProjectDetails(): Promise<ProjectDetailsResponse> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
             const res = await langClient.getProjectDetails();
             resolve(res);
         });
@@ -162,7 +163,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async setDeployPlugin(params: MavenDeployPluginDetails): Promise<MavenDeployPluginDetails> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
             const res = await langClient.setDeployPlugin(params);
             await this.updatePom([res.textEdit]);
             resolve(res);
@@ -171,7 +172,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async getDeployPluginDetails(): Promise<MavenDeployPluginDetails> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
             const res = await langClient.getDeployPluginDetails();
             resolve(res);
         });
@@ -179,7 +180,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async removeDeployPlugin(): Promise<MavenDeployPluginDetails> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
             const res = await langClient.removeDeployPlugin();
             if (res.range.start.line !== 0 && res.range.start.character !== 0) {
                 await this.updatePom([res]);
@@ -196,7 +197,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
      */
     async updateProperties(params: UpdatePropertiesRequest): Promise<boolean> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
             const res = await langClient.updateProperties(params);
             await this.updatePom(res.textEdits);
             resolve(true);
@@ -212,7 +213,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
     async reloadDependencies(params?: ReloadDependenciesRequest): Promise<boolean> {
         return new Promise(async (resolve) => {
             let reloadDependenciesResult = true;
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
             const updateDependenciesResult = await langClient?.updateConnectorDependencies();
             if (!updateDependenciesResult.toLowerCase().startsWith("success")) {              
                 const connectorsNotDownloaded: string[] = [];
@@ -324,7 +325,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async updateDependencies(params: UpdateDependenciesRequest): Promise<boolean> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
 
             const projectDetails = await langClient.getProjectDetails();
             const existingDependencies = projectDetails.dependencies || [];
@@ -367,7 +368,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async getDependencyStatusList(): Promise<DependencyStatusResponse> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
             const res = await langClient.getDependencyStatusList();
             resolve(res);
         });
@@ -423,7 +424,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async updateConnectorDependencies(): Promise<string> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
             const res = await langClient.updateConnectorDependencies();
             await extractCAppDependenciesAsProjects(this.projectUri);
             resolve(res);
@@ -432,7 +433,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async updateDependenciesFromOverview(params: UpdateDependenciesRequest): Promise<boolean> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
             const res = await langClient.updateDependencies({ dependencies: params.dependencies });
             await this.updatePom(res.textEdits);
             resolve(true);
@@ -619,86 +620,99 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async getAvailableRuntimeServices(): Promise<RuntimeServicesResponse> {
         return new Promise(async (resolve) => {
-            const username = DebuggerConfig.getManagementUserName();
-            const password = DebuggerConfig.getManagementPassword();
-
-            const token = Buffer.from(`${username}:${password}`, 'utf8').toString('base64');
-            const authHeader = `Basic ${token}`;
-            // Create an HTTPS agent that ignores SSL certificate verification
-            // MI has ignored the verification for management api, check on this
-            const agent = new https.Agent({ rejectUnauthorized: false });
-
             const runtimeServicesResponse: RuntimeServicesResponse = {
                 api: undefined,
                 proxy: undefined,
                 dataServices: undefined
             };
+            try {
+                const username = DebuggerConfig.getManagementUserName();
+                const password = DebuggerConfig.getManagementPassword();
 
-            const managementPort = DebuggerConfig.getManagementPort();
-            const host = DebuggerConfig.getHost();
+                process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-            const response = await fetch(`https://${host}:${managementPort}/management/login`, {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Basic ${token}`,
-                },
-                agent: agent // Pass the custom agent
-            });
+                const token = Buffer.from(`${username}:${password}`, 'utf8').toString('base64');
+                const authHeader = `Basic ${token}`;
+                // Create an HTTPS agent that ignores SSL certificate verification
+                // MI has ignored the verification for management api, check on this
+                const agent = new https.Agent({ rejectUnauthorized: false });
 
-            if (response.ok) {
-                const responseBody = await response.json() as { AccessToken: string } | undefined;
-                const authToken = responseBody?.AccessToken;
+                const managementPort = DebuggerConfig.getManagementPort();
+                const host = DebuggerConfig.getHost();
 
-                const apiResponse = await fetch(`https://${host}:${managementPort}/management/apis`, {
+                const response = await fetch(`https://${host}:${managementPort}/management/login`, {
                     method: 'GET',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${authToken}`
+                        'Authorization': `Basic ${token}`,
                     },
                     agent: agent // Pass the custom agent
                 });
 
-                if (apiResponse.ok) {
-                    const apiResponseData = await apiResponse.json() as RuntimeServiceDetails | undefined;
-                    runtimeServicesResponse.api = apiResponseData;
+                if (response.ok) {
+                    const responseBody = await response.json() as { AccessToken: string } | undefined;
+                    const authToken = responseBody?.AccessToken;
+
+                    const apiResponse = await fetch(`https://${host}:${managementPort}/management/apis`, {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${authToken}`
+                        },
+                        agent: agent // Pass the custom agent
+                    });
+
+                    if (apiResponse.ok) {
+                        const apiResponseData = await apiResponse.json() as RuntimeServiceDetails | undefined;
+                        if (apiResponseData?.list && Array.isArray(apiResponseData.list)) {
+                            apiResponseData.list = apiResponseData.list.map(item => ({
+                                ...item,
+                                url: item.url ? this.replaceHostname(item.url, host) : item.url 
+                            }));
+                        }
+                        runtimeServicesResponse.api = apiResponseData;
+                    }
+
+
+                    // get the proxy details
+                    const proxyResponse = await fetch(`https://${host}:${managementPort}/management/proxy-services`, {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${authToken}`
+                        },
+                        agent: agent // Pass the custom agent
+                    });
+
+                    if (proxyResponse.ok) {
+                        const proxyResponseData = await proxyResponse.json() as RuntimeServiceDetails | undefined;
+                        runtimeServicesResponse.proxy = proxyResponseData;
+                    }
+
+                    // get the data services details
+                    const dataServicesResponse = await fetch(`https://${host}:${managementPort}/management/data-services`, {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${authToken}`
+                        },
+                        agent: agent // Pass the custom agent
+                    });
+
+                    if (dataServicesResponse.ok) {
+                        const dataServicesResponseData = await dataServicesResponse.json() as RuntimeServiceDetails | undefined;
+                        runtimeServicesResponse.dataServices = dataServicesResponseData;
+                    }
+                } else {
+                    log(`Error while login to MI management api: ${response.statusText}`);
+                    vscode.window.showErrorMessage(`Error while login into the MI Management API: ${response.statusText}`);
                 }
-
-
-                // get the proxy details
-                const proxyResponse = await fetch(`https://${host}:${managementPort}/management/proxy-services`, {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${authToken}`
-                    },
-                    agent: agent // Pass the custom agent
-                });
-
-                if (proxyResponse.ok) {
-                    const proxyResponseData = await proxyResponse.json() as RuntimeServiceDetails | undefined;
-                    runtimeServicesResponse.proxy = proxyResponseData;
-                }
-
-                // get the data services details
-                const dataServicesResponse = await fetch(`https://${host}:${managementPort}/management/data-services`, {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${authToken}`
-                    },
-                    agent: agent // Pass the custom agent
-                });
-
-                if (dataServicesResponse.ok) {
-                    const dataServicesResponseData = await dataServicesResponse.json() as RuntimeServiceDetails | undefined;
-                    runtimeServicesResponse.dataServices = dataServicesResponseData;
-                }
-
+            } catch (error) {
+                log(`Error while fetching runtime services: ${error}`);
+                vscode.window.showErrorMessage(`Error while fetching runtime services: ${error}`);
+            } finally {
+                process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';
                 resolve(runtimeServicesResponse);
-            } else {
-                log(`Error while login to MI management api: ${response.statusText}`);
-                vscode.window.showErrorMessage(`Error while login into the MI Management API: ${response.statusText}`);
             }
         });
     }
@@ -775,7 +789,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
     }
     async getProjectOverview(params: ProjectStructureRequest): Promise<ProjectOverviewResponse> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
             const res = await langClient.getOverviewModel();
             resolve(res);
         });
@@ -861,7 +875,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async importOpenAPISpec(params: ImportOpenAPISpecRequest): Promise<void> {
         const { filePath } = params;
-        const langClient = getStateMachine(this.projectUri).context().langClient!;
+        const langClient = await MILanguageClient.getInstance(this.projectUri);
         if (filePath && filePath.length > 0) {
             const connectorGenRequest = {
                 openAPIPath: filePath,
@@ -903,7 +917,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async updateAiDependencies(params: UpdateAiDependenciesRequest): Promise<boolean> {
         return new Promise(async (resolve) => {
-            const langClient = getStateMachine(this.projectUri).context().langClient!;
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
 
             const projectDetails = await langClient.getProjectDetails();
             const existingDependencies = projectDetails.dependencies || [];
@@ -948,5 +962,16 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
             resolve(false);
         });
+    }
+
+    replaceHostname(originalUrl: string, targetHost: string) {
+        try {
+            const urlObj = new URL(originalUrl);
+            urlObj.hostname = targetHost;
+            return urlObj.toString();
+        } catch (e) {
+            log(`Failed to parse URL. originalUrl="${originalUrl}", targetHost="${targetHost}", error=${e}`);
+            return originalUrl;
+        }
     }
 }

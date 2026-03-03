@@ -25,7 +25,8 @@ import {
     EVENT_TYPE,
     MACHINE_VIEW,
     TypeNodeKind,
-    Member
+    Member,
+    Protocol
 } from "@wso2/ballerina-core";
 import { useRpcContext } from "@wso2/ballerina-rpc-client";
 import { TypeDiagram as TypeDesignDiagram } from "@wso2/type-diagram";
@@ -79,14 +80,14 @@ const Path = styled.span`
 `;
 
 interface GraphQLDiagramProps {
+    projectPath: string;
     filePath: string;
     position: NodePosition;
-    projectUri?: string;
     serviceIdentifier: string;
 }
 
 export function GraphQLDiagram(props: GraphQLDiagramProps) {
-    const { filePath, position, projectUri, serviceIdentifier } = props;
+    const { projectPath, filePath, position, serviceIdentifier } = props;
     const { rpcClient } = useRpcContext();
     const queryClient = useQueryClient();
     const [isServiceEditorOpen, setIsServiceEditorOpen] = useState<boolean>(false);
@@ -136,6 +137,10 @@ export function GraphQLDiagram(props: GraphQLDiagramProps) {
         if (stack.length <= 1) return;
         setStack((prev) => {
             const newStack = [...prev];
+            //preserve fieldIndex if exists
+            if (newStack[newStack.length - 1].fieldIndex) {
+                item.fieldIndex = newStack[newStack.length - 1].fieldIndex;
+            }
             newStack[newStack.length - 1] = item;
             return newStack;
         });
@@ -361,16 +366,25 @@ export function GraphQLDiagram(props: GraphQLDiagramProps) {
 
     const onSaveType = () => {
         if (stack.length > 0) {
+            if (stack.length > 1) {
+                const newStack = [...stack]
+                const currentTop = newStack[newStack.length - 1];
+                const newTop = newStack[newStack.length - 2];
+                newTop.type.members[newTop.fieldIndex!].type = currentTop!.type.name;
+                newStack[newStack.length - 2] = newTop;
+                newStack.pop();
+                setStack(newStack);
+            }
             setRefetchForCurrentModal(true);
-            popTypeStack();
         }
         setIsTypeEditorOpen(stack.length !== 1);
     }
 
-    const getNewTypeCreateForm = () => {
+    const getNewTypeCreateForm = (fieldIndex?: number, typeName?: string) => {
         pushTypeStack({
             type: createNewType(),
-            isDirty: false
+            isDirty: false,
+            fieldIndex: fieldIndex
         });
         setIsTypeEditorOpen(true);
     }
@@ -389,7 +403,7 @@ export function GraphQLDiagram(props: GraphQLDiagramProps) {
     return (
         <>
             <View>
-                <TopNavigationBar />
+                <TopNavigationBar projectPath={projectPath} />
                 {!focusedNodeId && (
                     <TitleBar
                         title="GraphQL"
@@ -509,8 +523,8 @@ export function GraphQLDiagram(props: GraphQLDiagramProps) {
                                     type={peekTypeStack()?.type}
                                     newType={peekTypeStack() ? peekTypeStack().isDirty : false}
                                     newTypeValue={peekTypeStack()?.type?.name ?? ''}
-                                    isGraphql={true}
                                     isPopupTypeForm={true}
+                                    isGraphql={true}
                                     onTypeChange={onTypeChange}
                                     onTypeCreate={() => { }}
                                     onSaveType={onSaveType}
@@ -527,7 +541,6 @@ export function GraphQLDiagram(props: GraphQLDiagramProps) {
                     serviceIdentifier={serviceIdentifier}
                     onClose={onTypeEditorClosed}
                     type={editingType}
-                    projectUri={projectUri}
                     onImplementation={handleOnImplementation}
                 />
             )}

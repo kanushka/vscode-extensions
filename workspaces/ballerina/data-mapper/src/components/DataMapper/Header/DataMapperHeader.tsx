@@ -25,14 +25,14 @@ import { View } from "../Views/DataMapperView";
 import { VSCodeButton } from "@vscode/webview-ui-toolkit/react";
 import AutoMapButton from "./AutoMapButton";
 import ExpressionBarWrapper from "./ExpressionBar";
-import EditButton from "./EditButton";
+import ConfigButton from "./ConfigButton";
 import { ActionIconButton } from "./ActionIconButton";
 
 export interface DataMapperHeaderProps {
     views: View[];
     reusable?: boolean;
     switchView: (index: number) => void;
-    hasEditDisabled: boolean;
+    hasEditDisabled?: boolean;
     onClose: () => void;
     onBack: () => void;
     onEdit?: () => void;
@@ -52,7 +52,7 @@ export function DataMapperHeader(props: DataMapperHeaderProps) {
     return (
         <HeaderContainer>
             <HeaderContent>
-                <IconButton onClick={onBack}>
+                <IconButton onClick={onBack} data-testid="back-button">
                     <Icon name="bi-arrow-back" iconSx={{ fontSize: "24px", color: "var(--vscode-foreground)" }} />
                 </IconButton>
                 <BreadCrumb>
@@ -66,19 +66,24 @@ export function DataMapperHeader(props: DataMapperHeaderProps) {
                     )}
                 </BreadCrumb>
                 <RightContainer isClickable={!hasEditDisabled}>
-                    <ActionGroupContaner>
+                    <ActionGroupContainer>
                         {undoRedoGroup && undoRedoGroup()}
                         <ActionIconButton
                             onClick={onReset}
                             iconName="clear-all"
                             tooltip="Clear all mappings"
                         />
-                    </ActionGroupContaner>
+                        <ActionIconButton
+                            onClick={onRefresh}
+                            iconName="refresh"
+                            tooltip="Refresh all mappings"
+                        />
+                    </ActionGroupContainer>
                     <FilterBar>
                         <HeaderSearchBox />
                     </FilterBar>
                     <AutoMapButton onClick={handleAutoMap} disabled={false} />
-                    {onEdit && <EditButton onClick={onEdit} disabled={hasEditDisabled} />}
+                    {onEdit && <ConfigButton onClick={onEdit} disabled={hasEditDisabled} />}
                 </RightContainer>
                 <VSCodeButton
                     appearance="icon"
@@ -116,12 +121,6 @@ const Title = styled.h2`
     color: var(--vscode-foreground);
 `;
 
-const VerticalDivider = styled.div`
-    height: 20px;
-    width: 1px;
-    background-color: var(--dropdown-border);
-`;
-
 const RightContainer = styled.div<{ isClickable: boolean }>`
     display: flex;
     align-items: center;
@@ -130,8 +129,9 @@ const RightContainer = styled.div<{ isClickable: boolean }>`
     opacity: ${({ isClickable }) => (isClickable ? 1 : 0.5)};
 `;
 
-const ActionGroupContaner = styled.div`
+const ActionGroupContainer = styled.div`
     display: flex;
+    gap: 2px;
 `;
 
 const BreadCrumb = styled.div`

@@ -21,8 +21,13 @@ import {
     AddArrayElementRequest,
     AddClausesRequest,
     AddSubMappingRequest,
+    ClausePositionRequest,
+    ClausePositionResponse,
     ClearTypeCacheResponse,
+    ConvertExpressionRequest,
+    ConvertExpressionResponse,
     ConvertToQueryRequest,
+    CreateConvertedVariableRequest,
     DataMapperAPI,
     DataMapperModelRequest,
     DataMapperModelResponse,
@@ -34,6 +39,7 @@ import {
     DMModelRequest,
     ExpandedDMModel,
     ExpandedDMModelResponse,
+    FieldPropertyRequest,
     GetDataMapperCodedataRequest,
     GetDataMapperCodedataResponse,
     GetSubMappingCodedataRequest,
@@ -233,6 +239,26 @@ export class DataMapperRpcManager implements DataMapperAPI {
         });
     }
 
+    async getFieldProperty(params: FieldPropertyRequest): Promise<PropertyResponse> {
+        return new Promise(async (resolve) => {
+            const property = await StateMachine
+                .langClient()
+                .getFieldProperty(params) as PropertyResponse;
+
+            resolve(property);
+        });
+    }
+
+    async getClausePosition(params: ClausePositionRequest): Promise<ClausePositionResponse> {
+        return new Promise(async (resolve) => {
+            const position: any = await StateMachine
+                .langClient()
+                .getClausePosition(params);
+
+            resolve(position);
+        });
+    }
+
     async deleteMapping(params: DeleteMappingRequest): Promise<DataMapperSourceResponse> {
         return new Promise(async (resolve) => {
             await StateMachine
@@ -384,6 +410,15 @@ export class DataMapperRpcManager implements DataMapperAPI {
         });
     }
 
+    async getConvertedExpression(params: ConvertExpressionRequest): Promise<ConvertExpressionResponse> {
+        return new Promise(async (resolve) => {
+            const res = await StateMachine
+                .langClient()
+                .getConvertedExpression(params);
+            resolve(res);
+        });
+    }
+
     async clearTypeCache(): Promise<ClearTypeCacheResponse> {
         return new Promise(async (resolve) => {
             await StateMachine
@@ -391,6 +426,28 @@ export class DataMapperRpcManager implements DataMapperAPI {
                 .clearTypeCache()
                 .then((resp) => {
                     resolve(resp);
+                });
+        });
+    }
+
+    async createConvertedVariable(params: CreateConvertedVariableRequest): Promise<DataMapperSourceResponse> {
+        return new Promise(async (resolve) => {
+            await StateMachine
+                .langClient()
+                .createConvertedVariable(params)
+                .then((resp) => {
+                    console.log(">>> Data mapper create converted variable response", resp);
+                    updateAndRefreshDataMapper(
+                        resp.textEdits,
+                        params.filePath,
+                        params.codedata,
+                        params.varName,
+                        params.targetField,
+                        params.subMappingName
+                    )
+                    .then(() => {
+                        resolve({ textEdits: resp.textEdits });
+                    });
                 });
         });
     }

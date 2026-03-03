@@ -23,35 +23,39 @@ import {
     Button,
     CompletionItem,
     ErrorBanner,
-    FormExpressionEditor,
     FormExpressionEditorRef,
     HelperPaneHeight,
     RequiredFormInput,
-    ThemeColors,
-    Tooltip
+    ThemeColors
 } from '@wso2/ui-toolkit';
-import { getPropertyFromFormField, sanitizeType } from './utils';
+import { buildRequiredRule, getPropertyFromFormField, isExpandableMode, sanitizeType, toEditorMode } from './utils';
 import { FormField, FormExpressionEditorProps, HelperpaneOnChangeOptions } from '../Form/types';
 import { useFormContext } from '../../context';
 import {
+    ExpressionProperty,
+    FormDiagnostics,
+    getPrimaryInputType,
+    InputType,
     LineRange,
     RecordTypeField,
     SubPanel,
-    SubPanelView
+    SubPanelView,
+    Type
 } from '@wso2/ballerina-core';
 import ReactMarkdown from 'react-markdown';
 import { FieldProvider } from "./FieldContext";
+import { useModeSwitcherContext } from "./ModeSwitcherContext";
 import ModeSwitcher from '../ModeSwitcher';
 import { ExpressionField } from './ExpressionField';
-import WarningPopup from '../WarningPopup';
 import { InputMode } from './MultiModeExpressionEditor/ChipExpressionEditor/types';
-import { getDefaultExpressionMode, getInputModeFromTypes } from './MultiModeExpressionEditor/ChipExpressionEditor/utils';
+import { getInputModeFromTypes } from './MultiModeExpressionEditor/ChipExpressionEditor/utils';
 import { ExpandedEditor } from './ExpandedEditor';
 
 export type ContextAwareExpressionEditorProps = {
     id?: string;
     fieldKey?: string;
-    valueTypeConstraint?: string;
+    fieldInputType: InputType;
+    inputTypes?: InputType[];
     placeholder?: string;
     required?: boolean;
     showHeader?: boolean;
@@ -110,6 +114,11 @@ export namespace S {
         display: flex;
         align-items: center;
         gap: 8px;
+    `;
+
+    export const ItemContainer = styled.div`
+        border: 1px solid var(--vscode-dropdown-border);
+        border-radius: 4px
     `;
 
     export const LabelContainer = styled.div({
@@ -305,11 +314,56 @@ export const ContextAwareExpressionEditor = (props: ContextAwareExpressionEditor
     );
 };
 
+export const DataMapperJoinClauseRhsEditor = (props: ContextAwareExpressionEditorProps) => {
+    const { form, expressionEditor, targetLineRange, fileName } = useFormContext();
+
+    const modifiedExpressionEditor = {
+        ...expressionEditor
+    };
+
+    modifiedExpressionEditor.retrieveCompletions = async (value: string, property: ExpressionProperty, offset: number, triggerCharacter?: string) => {
+        const varName = form.watch('name');
+        const expression = form.watch('expression');
+        const prefixExpr = `from var ${varName} in ${expression} select `;
+        return await expressionEditor.retrieveCompletions(prefixExpr + value, property, prefixExpr.length + offset, triggerCharacter);
+    }
+
+    modifiedExpressionEditor.getExpressionEditorDiagnostics = async (
+        showDiagnostics: boolean,
+        expression: string,
+        key: string,
+        property: ExpressionProperty
+    ) => {
+        const varName = form.watch('name');
+        const joinExpression = form.watch('expression');
+        const prefixExpr = `from var ${varName} in ${joinExpression} select `;
+        return await expressionEditor.getExpressionEditorDiagnostics(
+            showDiagnostics,
+            prefixExpr + expression,
+            key,
+            property
+        );
+    }
+
+    return (
+        <ExpressionEditor
+            fileName={fileName}
+            targetLineRange={targetLineRange}
+            helperPaneZIndex={props.helperPaneZIndex}
+            {...form}
+            {...modifiedExpressionEditor}
+            {...props}
+        />
+    );
+};
+
+
 export const ExpressionEditor = (props: ExpressionEditorProps) => {
     const {
         autoFocus,
         control,
         field,
+        fieldInputType,
         id,
         placeholder,
         required,
@@ -330,6 +384,7 @@ export const ExpressionEditor = (props: ExpressionEditorProps) => {
         onCancel,
         onRemove,
         handleOnFieldFocus,
+        onOpenRecordConfigPage,
         targetLineRange,
         fileName,
         helperPaneHeight,
@@ -342,9 +397,7 @@ export const ExpressionEditor = (props: ExpressionEditorProps) => {
 
     const key = fieldKey ?? field.key;
     const [focused, setFocused] = useState<boolean>(false);
-    const [inputMode, setInputMode] = useState<InputMode>(InputMode.EXP);
     const [isExpressionEditorHovered, setIsExpressionEditorHovered] = useState<boolean>(false);
-    const [showModeSwitchWarning, setShowModeSwitchWarning] = useState(false);
     const [formDiagnostics, setFormDiagnostics] = useState(field.diagnostics);
     const [isExpandedModalOpen, setIsExpandedModalOpen] = useState(false);
 
@@ -354,12 +407,15 @@ export const ExpressionEditor = (props: ExpressionEditorProps) => {
     }, [field.diagnostics]);
 
 
+
     // If Form directly  calls ExpressionEditor without setting targetLineRange and fileName through context
     const { targetLineRange: contextTargetLineRange, fileName: contextFileName } = useFormContext();
     const effectiveTargetLineRange = targetLineRange ?? contextTargetLineRange;
     const effectiveFileName = fileName ?? contextFileName;
 
-    const initialFieldValue = useRef(field.value);
+    if (field.placeholder === 'object {}' || field.placeholder === '""') {
+        field.placeholder = '';
+    }
 
     const [isHelperPaneOpen, setIsHelperPaneOpen] = useState<boolean>(false);
     /* Define state to retrieve helper pane data */
@@ -367,21 +423,37 @@ export const ExpressionEditor = (props: ExpressionEditorProps) => {
     const exprRef = useRef<FormExpressionEditorRef>(null);
     const anchorRef = useRef<HTMLDivElement>(null);
 
-    const { nodeInfo } = useFormContext();
+    // This guard is here because the IF form and Match forms
+    //  does not populate the context value since they use expressionEditor 
+    // component directly instead of going through the FieldFactory. 
+    // This should ideally be handled as followes.
+    //  1.) Refactor IF and Match forms to use FieldFactory component
+    //  and LS property models
+    //  2.) Remove this guard and make sure all the usages of ExpressionEditor 
+    // are wrapped with ModeSwitcherContext provider
+    const modeSwitcherContext = useModeSwitcherContext() ?? {
+        inputMode: InputMode.EXP,
+        isModeSwitcherEnabled: false,
+        isRecordTypeField: false,
+        onModeChange: () => { },
+        types: undefined
+    };
+
+    const { inputMode } = modeSwitcherContext;
 
     // Use to fetch initial diagnostics
     const previousDiagnosticsFetchContext = useRef<diagnosticsFetchContext>({
         fetchedInitialDiagnostics: false,
         diagnosticsFetchedTargetLineRange: undefined
     });
-    const fieldValue = rawExpression ? rawExpression(watch(key)) : watch(key);
+    const fieldValue = (inputMode === InputMode.PROMPT || inputMode === InputMode.TEMPLATE) && rawExpression ? rawExpression(watch(key)) : watch(key);
 
     // Initial render
     useEffect(() => {
         if (!targetLineRange) return;
         // Fetch initial diagnostics
         if (getExpressionEditorDiagnostics && fieldValue !== undefined
-            && inputMode === InputMode.EXP
+            && (inputMode === InputMode.EXP || inputMode === InputMode.PROMPT || inputMode === InputMode.TEMPLATE)
             && (previousDiagnosticsFetchContext.current.fetchedInitialDiagnostics === false
                 || previousDiagnosticsFetchContext.current.diagnosticsFetchedTargetLineRange !== targetLineRange
             )) {
@@ -399,32 +471,24 @@ export const ExpressionEditor = (props: ExpressionEditorProps) => {
         }
     }, [fieldValue, targetLineRange]);
 
-    useEffect(() => {
-        let newInputMode = getInputModeFromTypes(field.valueTypeConstraint)
-        if (isModeSwitcherRestricted()) {
-            setInputMode(InputMode.EXP);
-            return;
-        }
-        if (!newInputMode) {
-            setInputMode(InputMode.EXP);
-            return;
-        }
-        if (newInputMode === InputMode.TEXT
-            && typeof initialFieldValue.current === 'string'
-            && initialFieldValue.current.trim() !== ''
-            && !(initialFieldValue.current.trim().startsWith("\"")
-                && initialFieldValue.current.trim().endsWith("\"")
-            )
-        ) {
-            setInputMode(InputMode.EXP)
-        }
-        else {
-            setInputMode(newInputMode);
-        }
-    }, [field?.valueTypeConstraint]);
-
-    const handleFocus = async () => {
+    const handleFocus = async (controllerOnChange?: (value: string) => void) => {
         setFocused(true);
+
+        // If in guided mode with recordTypeField, open ConfigureRecordPage directly
+        if (inputMode === InputMode.RECORD && recordTypeField && onOpenRecordConfigPage) {
+            const currentValue = watch(key) || '';
+            // Create onChange callback that updates the form value
+            const onChangeCallback = (value: string) => {
+                if (controllerOnChange) {
+                    controllerOnChange(value);
+                } else {
+                    setValue(key, value);
+                }
+            };
+            onOpenRecordConfigPage(key, currentValue, recordTypeField, onChangeCallback);
+            return;
+        }
+
         // Trigger actions on focus
         await onFocus?.();
         handleOnFieldFocus?.(key);
@@ -475,42 +539,13 @@ export const ExpressionEditor = (props: ExpressionEditorProps) => {
             helperPaneHeight,
             recordTypeField,
             field.type === "LV_EXPRESSION",
-            field.valueTypeConstraint,
+            field.types,
+            inputMode,
         );
     };
 
     const handleExtractArgsFromFunction = async (value: string, cursorPosition: number) => {
         return await extractArgsFromFunction(value, getPropertyFromFormField(field), cursorPosition);
-    };
-
-    const handleModeChange = (value: InputMode) => {
-        const currentValue = watch(key);
-        if (
-            inputMode === InputMode.EXP
-            && value === InputMode.TEXT
-            && (!currentValue.trim().startsWith("\"") || !currentValue.trim().endsWith("\""))
-            && currentValue.trim() !== ''
-        ) {
-            setShowModeSwitchWarning(true);
-            return;
-        }
-        if (inputMode === InputMode.TEXT && value === InputMode.EXP) {
-            if (currentValue && typeof currentValue === 'string' &&
-                !currentValue.startsWith('"') && !currentValue.endsWith('"')) {
-                setValue(key, `"${currentValue}"`);
-            }
-        }
-        setInputMode(value);
-    };
-
-    const handleModeSwitchWarningContinue = () => {
-        const defaultMode = getDefaultExpressionMode(field.valueTypeConstraint);
-        setInputMode(defaultMode);
-        setShowModeSwitchWarning(false);
-    };
-
-    const handleModeSwitchWarningCancel = () => {
-        setShowModeSwitchWarning(false);
     };
 
     const handleOpenExpandedMode = () => {
@@ -524,31 +559,15 @@ export const ExpressionEditor = (props: ExpressionEditorProps) => {
         }
     };
 
-    // Only allow opening expanded mode for specific fields
-    const onOpenExpandedMode = (!props.isInExpandedMode && ["query", "instructions", "role"].includes(field.key))
+    const onOpenExpandedMode = !props.isInExpandedMode && isExpandableMode(inputMode)
         ? handleOpenExpandedMode
         : undefined;
-
-    const defaultValueText = field.defaultValue ?
-        <S.DefaultValue>Defaults to {field.defaultValue}</S.DefaultValue> : null;
 
     const documentation = field.documentation
         ? field.documentation.endsWith('.')
             ? field.documentation
             : `${field.documentation}.`
         : '';
-
-    const isModeSwitcherRestricted = () => {
-        if (nodeInfo?.kind === "FOREACH") return true;
-        return false;
-    };
-
-    const isModeSwitcherAvailable = () => {
-        if (isModeSwitcherRestricted()) return false;
-        if (!(focused || isExpressionEditorHovered)) return false;
-        if (!getInputModeFromTypes(field.valueTypeConstraint)) return false;
-        return true;
-    }
 
     return (
         <FieldProvider
@@ -557,6 +576,7 @@ export const ExpressionEditor = (props: ExpressionEditorProps) => {
         >
             <S.Container
                 id={id}
+                data-testid={`ex-editor-${field.key}`}
                 onMouseEnter={() => setIsExpressionEditorHovered(true)}
                 onMouseLeave={() => setIsExpressionEditorHovered(false)}
             >
@@ -564,137 +584,265 @@ export const ExpressionEditor = (props: ExpressionEditorProps) => {
                     <S.Header>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', gap: '8px' }}>
                             <div>
-                                <S.HeaderContainer>
-                                    <S.LabelContainer>
-                                        <S.Label>{field.label}</S.Label>
+                                {field.label && (
+                                    <S.HeaderContainer>
+                                        <S.LabelContainer>
+                                            <S.Label>{field.label}</S.Label>
+                                            {field.defaultValue && <S.DefaultValue style={{marginLeft: '8px'}}>{ `(Default: ${field.defaultValue}) `}</S.DefaultValue>}
                                         {(required ?? !field.optional) && <RequiredFormInput />}
-                                        {field.valueTypeConstraint && (
-                                            <S.Type style={{ marginLeft: '5px' }} isVisible={focused} title={field.valueTypeConstraint as string}>
-                                                {sanitizeType(field.valueTypeConstraint as string)}
-                                            </S.Type>
-                                        )}
-                                    </S.LabelContainer>
-                                </S.HeaderContainer>
+                                            {getPrimaryInputType(field.types)?.ballerinaType && (
+                                                <S.Type style={{ marginLeft: '5px' }} isVisible={focused} title={getPrimaryInputType(field.types)?.ballerinaType}>
+                                                    {sanitizeType(getPrimaryInputType(field.types)?.ballerinaType)}
+                                                </S.Type>
+                                            )}
+                                        </S.LabelContainer>
+                                    </S.HeaderContainer>
+                                )}
                                 <S.EditorMdContainer>
                                     {documentation && <ReactMarkdown>{documentation}</ReactMarkdown>}
-                                    {defaultValueText}
                                 </S.EditorMdContainer>
                             </div>
-                            <S.FieldInfoSection>
-                                {isModeSwitcherAvailable() && (
+                            {modeSwitcherContext?.isModeSwitcherEnabled && isExpressionEditorHovered && (
+                                <S.FieldInfoSection>
                                     <ModeSwitcher
-                                        value={inputMode}
-                                        onChange={handleModeChange}
-                                        valueTypeConstraint={field.valueTypeConstraint}
-                                        />
-                                    )}
-                            </S.FieldInfoSection>
+                                        fieldKey={field.key}
+                                        value={modeSwitcherContext.inputMode}
+                                        isRecordTypeField={modeSwitcherContext.isRecordTypeField}
+                                        onChange={modeSwitcherContext.onModeChange}
+                                        types={modeSwitcherContext.types}
+                                    />
+                                </S.FieldInfoSection>
+                            )}
                         </div>
                     </S.Header>
                 )}
                 <Controller
                     control={control}
                     name={key}
-                    rules={{ required: required ?? (!field.optional && !field.placeholder) }}
-                    render={({ field: { name, value, onChange }, fieldState: { error } }) => (
-                        <div>
-                            <ExpressionField
-                                inputMode={inputMode}
-                                name={name}
-                                value={value}
-                                completions={completions}
-                                fileName={effectiveFileName}
-                                targetLineRange={effectiveTargetLineRange}
-                                autoFocus={autoFocus}
-                                sanitizedExpression={sanitizedExpression}
-                                ariaLabel={field.label}
-                                placeholder={placeholder}
-                                onChange={async (updatedValue: string, updatedCursorPosition: number) => {
-                                    if (updatedValue === value) {
-                                        return;
-                                    }
+                    rules={(() => {
+                        const expressionSetType = field.types?.find(t => t.fieldType === "EXPRESSION_SET" || t.fieldType === "TEXT_SET");
+                        const patternType = field.types?.find(t => t.pattern);
+                        const rules: any = {};
 
-                                    // clear field diagnostics
-                                    setFormDiagnostics([]);
-                                    const rawValue = rawExpression ? rawExpression(updatedValue) : updatedValue;
+                        // Only use 'required' if there's no pattern validation (pattern will handle empty values)
+                        if (!patternType?.pattern && !expressionSetType?.pattern) {
+                            const effectiveRequired = required ?? !field.optional;
+                            rules.required = buildRequiredRule({
+                                isRequired: !!effectiveRequired,
+                                label: field.label
+                            });
+                        }
 
-                                    onChange(rawValue);
-                                    if (getExpressionEditorDiagnostics && inputMode === InputMode.EXP) {
-                                        getExpressionEditorDiagnostics(
-                                            (required ?? !field.optional) || rawValue !== '',
-                                            rawValue,
-                                            key,
-                                            getPropertyFromFormField(field)
-                                        );
-                                    }
+                        if (expressionSetType?.pattern) {
+                            // For EXPRESSION_SET or TEXT_SET (arrays), validate each item
+                            rules.validate = {
+                                pattern: (value: any) => {
+                                    try {
+                                        if (!Array.isArray(value)) return true;
 
-                                    // Check if the current character is a trigger character
-                                    const triggerCharacter =
-                                        updatedCursorPosition > 0
-                                            ? triggerCharacters.find((char) => rawValue[updatedCursorPosition - 1] === char)
-                                            : undefined;
-                                    if (triggerCharacter) {
-                                        await retrieveCompletions(
-                                            rawValue,
-                                            getPropertyFromFormField(field),
-                                            updatedCursorPosition,
-                                            triggerCharacter
-                                        );
-                                    } else {
-                                        await retrieveCompletions(
-                                            rawValue,
-                                            getPropertyFromFormField(field),
-                                            updatedCursorPosition
-                                        );
+                                        const regex = new RegExp(expressionSetType.pattern);
+                                        for (const item of value) {
+                                            if (!regex.test(item)) {
+                                                return expressionSetType.patternErrorMessage || "Invalid format";
+                                            }
+                                        }
+                                        return true;
+                                    } catch (error) {
+                                        console.error(`[${key}] Invalid regex pattern:`, expressionSetType.pattern, error);
+                                        return true; // Skip validation if regex is invalid
                                     }
-                                }}
-                                extractArgsFromFunction={handleExtractArgsFromFunction}
-                                onCompletionSelect={handleCompletionSelect}
-                                onFocus={async () => {
-                                    handleFocus();
-                                }}
-                                onBlur={handleBlur}
-                                onSave={handleSave}
-                                onCancel={onCancel}
-                                onRemove={onRemove}
-                                isHelperPaneOpen={isHelperPaneOpen}
-                                changeHelperPaneState={handleChangeHelperPaneState}
-                                getHelperPane={handleGetHelperPane}
-                                helperPaneHeight={helperPaneHeight}
-                                helperPaneWidth={recordTypeField ? 400 : undefined}
-                                growRange={growRange}
-                                helperPaneZIndex={helperPaneZIndex}
-                                exprRef={exprRef}
-                                anchorRef={anchorRef}
-                                onToggleHelperPane={toggleHelperPaneState}
-                                onOpenExpandedMode={onOpenExpandedMode}
-                                isInExpandedMode={props.isInExpandedMode}
-                            />
-                            {error ?
-                                <ErrorBanner errorMsg={error.message.toString()} /> :
-                                formDiagnostics && formDiagnostics.length > 0 &&
-                                <ErrorBanner errorMsg={formDiagnostics.map(d => d.message).join(', ')} />
-                            }
-                        </div>
-                    )}
+                                },
+                                minItems: (value: any) => {
+                                    if (!Array.isArray(value)) return true;
+                                    const minItems = expressionSetType.minItems ?? 0;
+                                    if (minItems > 0 && value.length < minItems) {
+                                        return `At least ${minItems} ${minItems > 1 ? 'items are' : 'item is'} required`;
+                                    }
+                                    return true;
+                                }
+                            };
+                        } else if (patternType?.pattern) {
+                            // For non-array fields, validate pattern only in TEXT mode with literal values
+                            rules.validate = {
+                                pattern: (value: any) => {
+                                    try {
+                                        const currentMode = inputMode;
+
+                                        // Only validate in TEXT mode
+                                        if (currentMode !== InputMode.TEXT) {
+                                            return true;
+                                        }
+
+                                        // Skip pattern validation if value contains interpolations (e.g., ${variable})
+                                        if (value && typeof value === 'string' && /\$\{[^}]*\}/.test(value)) {
+                                            return true;
+                                        }
+
+                                        // Validate pattern for TEXT mode with literal values
+                                        const regex = new RegExp(patternType.pattern);
+                                        if (!regex.test(value || '')) {
+                                            return patternType.patternErrorMessage || "Invalid format";
+                                        }
+
+                                        return true;
+                                    } catch (error) {
+                                        console.error(`[${key}] Invalid regex pattern:`, patternType.pattern, error);
+                                        return true; // Skip validation if regex is invalid
+                                    }
+                                }
+                            };
+                        }
+
+                        return rules;
+                    })()}
+                    render={({ field: { name, value, onChange }, fieldState: { error } }) => {
+                        return (
+                            <div>
+                                <ExpressionField
+                                    field={field}
+                                    inputMode={inputMode}
+                                    primaryMode={getInputModeFromTypes(getPrimaryInputType(field.types))}
+                                    name={name}
+                                    value={value}
+                                    completions={completions}
+                                    fileName={effectiveFileName}
+                                    targetLineRange={effectiveTargetLineRange}
+                                    autoFocus={recordTypeField ? false : autoFocus}
+                                    sanitizedExpression={(inputMode === InputMode.PROMPT || inputMode === InputMode.TEMPLATE) ? sanitizedExpression : undefined}
+                                    rawExpression={(inputMode === InputMode.PROMPT || inputMode === InputMode.TEMPLATE) ? rawExpression : undefined}
+                                    ariaLabel={field.label}
+                                    placeholder={placeholder}
+                                    onChange={async (updatedValue: string | any[] | Record<string, unknown>, updatedCursorPosition: number) => {
+
+                                        // clear field diagnostics
+                                        setFormDiagnostics([]);
+                                        // Use ref to get current mode (not stale closure value)
+                                        const currentMode = inputMode;
+                                        const rawValue = (currentMode === InputMode.PROMPT || currentMode === InputMode.TEMPLATE) &&
+                                            rawExpression ? rawExpression(typeof updatedValue === 'string' ? updatedValue : JSON.stringify(updatedValue)) : updatedValue;
+
+                                        onChange(rawValue);
+                                        if (getExpressionEditorDiagnostics && (currentMode === InputMode.EXP || currentMode === InputMode.PROMPT || currentMode === InputMode.TEMPLATE)) {
+                                            getExpressionEditorDiagnostics(
+                                                (required ?? !field.optional) || updatedValue !== '',
+                                                typeof rawValue === 'string' ? rawValue : JSON.stringify(rawValue),
+                                                key,
+                                                getPropertyFromFormField(field)
+                                            );
+                                        }
+
+                                        // Check if the current character is a trigger character
+                                        const triggerCharacter =
+                                            updatedCursorPosition > 0
+                                                ? triggerCharacters.find((char) => updatedValue[updatedCursorPosition - 1] === char)
+                                                : undefined;
+                                        if (triggerCharacter) {
+                                            await retrieveCompletions(
+                                                typeof updatedValue === 'string' ? updatedValue : JSON.stringify(updatedValue),
+                                                getPropertyFromFormField(field),
+                                                updatedCursorPosition,
+                                                triggerCharacter
+                                            );
+                                        } else {
+                                            await retrieveCompletions(
+                                                typeof updatedValue === 'string' ? updatedValue : JSON.stringify(updatedValue),
+                                                getPropertyFromFormField(field),
+                                                updatedCursorPosition
+                                            );
+                                        }
+                                    }}
+                                    extractArgsFromFunction={handleExtractArgsFromFunction}
+                                    onCompletionSelect={handleCompletionSelect}
+                                    onFocus={async () => {
+                                        handleFocus(onChange);
+                                    }}
+                                    onBlur={handleBlur}
+                                    onSave={handleSave}
+                                    onCancel={onCancel}
+                                    onRemove={onRemove}
+                                    isHelperPaneOpen={isHelperPaneOpen}
+                                    changeHelperPaneState={handleChangeHelperPaneState}
+                                    getHelperPane={handleGetHelperPane}
+                                    helperPaneHeight={helperPaneHeight}
+                                    helperPaneWidth={recordTypeField ? 400 : undefined}
+                                    growRange={growRange}
+                                    helperPaneZIndex={helperPaneZIndex}
+                                    exprRef={exprRef}
+                                    anchorRef={anchorRef}
+                                    onToggleHelperPane={toggleHelperPaneState}
+                                    onOpenExpandedMode={onOpenExpandedMode}
+                                    isInExpandedMode={isExpandedModalOpen}
+                                />
+                                {error ?
+                                    <ErrorBanner errorMsg={error.message.toString()} /> :
+                                    formDiagnostics && formDiagnostics.length > 0 &&
+                                    <ErrorBanner errorMsg={formDiagnostics.map(d => d.message).join(', ')} />
+                                }
+                                {onOpenExpandedMode && toEditorMode(inputMode) && (
+                                    <ExpandedEditor
+                                        isOpen={isExpandedModalOpen}
+                                        field={field}
+                                        value={watch(key)}
+                                        onChange={async (updatedValue: string, updatedCursorPosition: number) => {
+
+                                            // clear field diagnostics
+                                            setFormDiagnostics([]);
+                                            // Use ref to get current mode (not stale closure value)
+                                            const currentMode = inputMode;
+                                            const rawValue = (currentMode === InputMode.PROMPT || currentMode === InputMode.TEMPLATE) && rawExpression ? rawExpression(updatedValue) : updatedValue;
+
+                                            onChange(rawValue);
+                                            if (getExpressionEditorDiagnostics && (inputMode === InputMode.EXP || inputMode === InputMode.PROMPT || inputMode === InputMode.TEMPLATE)) {
+                                                getExpressionEditorDiagnostics(
+                                                    (required ?? !field.optional) || rawValue !== '',
+                                                    rawValue,
+                                                    key,
+                                                    getPropertyFromFormField(field)
+                                                );
+                                            }
+
+                                            // Check if the current character is a trigger character
+                                            const triggerCharacter =
+                                                updatedCursorPosition > 0
+                                                    ? triggerCharacters.find((char) => rawValue[updatedCursorPosition - 1] === char)
+                                                    : undefined;
+                                            if (triggerCharacter) {
+                                                await retrieveCompletions(
+                                                    rawValue,
+                                                    getPropertyFromFormField(field),
+                                                    updatedCursorPosition,
+                                                    triggerCharacter
+                                                );
+                                            } else {
+                                                await retrieveCompletions(
+                                                    rawValue,
+                                                    getPropertyFromFormField(field),
+                                                    updatedCursorPosition
+                                                );
+                                            }
+                                        }}
+                                        onClose={() => {
+                                            setIsExpandedModalOpen(false)
+                                        }}
+                                        onSave={handleSaveExpandedMode}
+                                        mode={toEditorMode(inputMode)!}
+                                        completions={completions}
+                                        fileName={effectiveFileName}
+                                        targetLineRange={effectiveTargetLineRange}
+                                        sanitizedExpression={sanitizedExpression}
+                                        rawExpression={rawExpression}
+                                        extractArgsFromFunction={handleExtractArgsFromFunction}
+                                        getHelperPane={handleGetHelperPane}
+                                        error={error}
+                                        formDiagnostics={formDiagnostics}
+                                        inputMode={inputMode}
+                                    />
+                                )}
+                            </div>
+                        );
+                    }}
                 />
             </S.Container>
-            {showModeSwitchWarning && (
-                <WarningPopup
-                    isOpen={showModeSwitchWarning}
-                    onContinue={handleModeSwitchWarningContinue}
-                    onCancel={handleModeSwitchWarningCancel}
-                />
-            )}
-            {onOpenExpandedMode && (
-                <ExpandedEditor
-                    isOpen={isExpandedModalOpen}
-                    field={field}
-                    value={watch(key)}
-                    onClose={() => setIsExpandedModalOpen(false)}
-                    onSave={handleSaveExpandedMode}
-                />
-            )}
         </FieldProvider>
     );
 };

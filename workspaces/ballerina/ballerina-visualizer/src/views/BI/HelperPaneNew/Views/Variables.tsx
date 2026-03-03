@@ -19,10 +19,10 @@
 import { ExpandableList } from "../Components/ExpandableList"
 import { TypeIndicator } from "../Components/TypeIndicator"
 import { useRpcContext } from "@wso2/ballerina-rpc-client"
-import { DataMapperDisplayMode, ExpressionProperty, FlowNode, LineRange, RecordTypeField } from "@wso2/ballerina-core"
+import { EditorConfig, EditorDisplayMode, ExpressionProperty, FlowNode, LineRange, RecordTypeField } from "@wso2/ballerina-core"
 import { Codicon, CompletionItem, Divider, HelperPaneCustom, SearchBox, ThemeColors, Tooltip, Typography } from "@wso2/ui-toolkit"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { getPropertyFromFormField, useFieldContext } from "@wso2/ballerina-side-panel"
+import { getPropertyFromFormField, useFieldContext, InputMode } from "@wso2/ballerina-side-panel"
 import FooterButtons from "../Components/FooterButtons"
 import { FormGenerator } from "../../Forms/FormGenerator"
 import { ScrollableContainer } from "../Components/ScrollableContainer"
@@ -42,7 +42,7 @@ type VariablesPageProps = {
     onChange: (value: string, isRecordConfigureChange: boolean, shouldKeepHelper?: boolean) => void;
     targetLineRange: LineRange;
     anchorRef: React.RefObject<HTMLDivElement>;
-    handleOnFormSubmit?: (updatedNode?: FlowNode, dataMapperMode?: DataMapperDisplayMode, options?: FormSubmitOptions, openDMInPopup?: boolean) => void;
+    handleOnFormSubmit?: (updatedNode?: FlowNode, editorConfig?: EditorConfig, options?: FormSubmitOptions, openDMInPopup?: boolean) => void;
     selectedType?: CompletionItem;
     filteredCompletions: CompletionItem[];
     currentValue: string;
@@ -50,17 +50,18 @@ type VariablesPageProps = {
     isInModal?: boolean;
     handleRetrieveCompletions: (value: string, property: ExpressionProperty, offset: number, triggerCharacter?: string) => Promise<void>;
     onClose?: () => void;
+    inputMode?: InputMode;
 }
 
-type VariableItemProps = {
+export type VariableItemProps = {
     item: CompletionItem;
-    onItemSelect: (value: string) => void;
+    onItemSelect: (value: string, item: CompletionItem) => void;
     onMoreIconClick: (value: string) => void;
+    hideArrow?: boolean;
 }
 
-const VariableItem = ({ item, onItemSelect, onMoreIconClick }: VariableItemProps) => {
-    const showArrow = shouldShowNavigationArrow(item);
-
+export const VariableItem = ({ item, onItemSelect, onMoreIconClick, hideArrow }: VariableItemProps) => {
+    const showArrow = shouldShowNavigationArrow(item) && !hideArrow;
     const mainContent = (
         <>
             {getHelperPaneIcon(HelperPaneIconType.VARIABLE)}
@@ -76,14 +77,14 @@ const VariableItem = ({ item, onItemSelect, onMoreIconClick }: VariableItemProps
     );
 
     const endAction = showArrow ? (
-        <Codicon 
-            name="chevron-right" 
+        <Codicon
+            name="chevron-right"
         />
     ) : undefined;
 
     return (
         <HelperPaneListItem
-            onClick={() => onItemSelect(item.label)}
+            onClick={() => onItemSelect(item.label, item)}
             endAction={endAction}
             onClickEndAction={() => onMoreIconClick(item.label)}
         >
@@ -93,17 +94,27 @@ const VariableItem = ({ item, onItemSelect, onMoreIconClick }: VariableItemProps
 };
 
 export const Variables = (props: VariablesPageProps) => {
-    const { fileName, targetLineRange, onChange, onClose, handleOnFormSubmit, selectedType, filteredCompletions, currentValue, isInModal, handleRetrieveCompletions } = props;
+    const { fileName, targetLineRange, onChange, onClose, handleOnFormSubmit, selectedType, filteredCompletions, currentValue, isInModal, handleRetrieveCompletions, inputMode } = props;
     const [searchValue, setSearchValue] = useState<string>("");
     const { rpcClient } = useRpcContext();
     const [isLoading, setIsLoading] = useState<boolean>(true);
     const [showContent, setShowContent] = useState<boolean>(false);
     const newNodeNameRef = useRef<string>("");
     const [projectPathUri, setProjectPathUri] = useState<string>();
-    const { breadCrumbSteps, navigateToNext, navigateToBreadcrumb, isAtRoot } = useHelperPaneNavigation("Variables");
+    const { breadCrumbSteps, navigateToNext, navigateToBreadcrumb, isAtRoot, getCurrentNavigationPath } = useHelperPaneNavigation("Variables");
     const { addModal, closeModal } = useModalStack()
 
     const { field, triggerCharacters } = useFieldContext();
+
+    // Use navigation path for completions instead of currentValue
+    const navigationPath = useMemo(() => {
+        const path = getCurrentNavigationPath();
+        return path;
+    }, [breadCrumbSteps]);
+    const completionContext = useMemo(() => {
+        const context = navigationPath ? navigationPath + '.' : currentValue;
+        return context;
+    }, [navigationPath, currentValue]);
 
     useEffect(() => {
         getProjectInfo()
@@ -112,30 +123,34 @@ export const Variables = (props: VariablesPageProps) => {
     useEffect(() => {
         setIsLoading(true);
         const triggerCharacter =
-            currentValue.length > 0
-                ? triggerCharacters.find((char) => currentValue[currentValue.length - 1] === char)
+            completionContext.length > 0
+                ? triggerCharacters.find((char) => completionContext[completionContext.length - 1] === char)
                 : undefined;
 
         // Only apply minimum loading time if we don't have any completions yet
         const shouldShowMinLoader = filteredCompletions.length === 0 && !showContent;
         const minLoadingTime = shouldShowMinLoader ? new Promise(resolve => setTimeout(resolve, 500)) : Promise.resolve();
 
+        // When navigating, use length as offset to position cursor after the dot
+        // When at root, use 0 to get all completions
+        const offset = navigationPath ? completionContext.length : 0;
+
         Promise.all([
-            handleRetrieveCompletions(currentValue, getPropertyFromFormField(field), 0, triggerCharacter),
+            handleRetrieveCompletions(completionContext, getPropertyFromFormField(field), offset, triggerCharacter),
             minLoadingTime
         ]).finally(() => {
             setIsLoading(false);
             setShowContent(true);
         });
 
-    }, [targetLineRange])
+    }, [targetLineRange, breadCrumbSteps, completionContext])
 
     const getProjectInfo = async () => {
-        const projectPath = await rpcClient.getVisualizerLocation();
-        setProjectPathUri(URI.file(projectPath.projectUri).fsPath);
+        const visualizerContext = await rpcClient.getVisualizerLocation();
+        setProjectPathUri(URI.file(visualizerContext.projectPath).fsPath);
     }
 
-    const handleSubmit = (updatedNode?: FlowNode, dataMapperMode?: DataMapperDisplayMode) => {
+    const handleSubmit = (updatedNode?: FlowNode, editorConfig?: EditorConfig) => {
         newNodeNameRef.current = "";
         // Safely extract the variable name as a string, fallback to empty string if not available
         const varName = typeof updatedNode?.properties?.variable?.value === "string"
@@ -144,9 +159,12 @@ export const Variables = (props: VariablesPageProps) => {
         newNodeNameRef.current = varName;
         handleOnFormSubmit?.(
             updatedNode,
-            dataMapperMode === DataMapperDisplayMode.VIEW ? DataMapperDisplayMode.POPUP : DataMapperDisplayMode.NONE,
             {
-                closeSidePanel: false, updateLineRange: true, postUpdateCallBack: () => {
+                view: editorConfig?.view,
+                displayMode: editorConfig?.displayMode === EditorDisplayMode.VIEW ? EditorDisplayMode.POPUP : EditorDisplayMode.NONE
+            },
+            {
+                closeSidePanel: false, isChangeFromHelperPane: true, postUpdateCallBack: () => {
                     onClose()
                     closeModal(POPUP_IDS.VARIABLE);
                     onChange(newNodeNameRef.current, false, true);
@@ -157,12 +175,12 @@ export const Variables = (props: VariablesPageProps) => {
 
     const dropdownItems = useMemo(() => {
         const excludedDescriptions = ["Configurable", "Parameter", "Listener", "Client"];
-        
+
         return filteredCompletions.filter(
             (completion) =>
                 (completion.kind === "field" || completion.kind === "variable") &&
                 completion.label !== "self" &&
-                !excludedDescriptions.some(desc => 
+                !excludedDescriptions.some(desc =>
                     completion.labelDetails?.description?.includes(desc)
                 )
         );
@@ -179,8 +197,10 @@ export const Variables = (props: VariablesPageProps) => {
         setSearchValue(searchText);
     };
 
-    const handleItemSelect = (value: string) => {
-        onChange(value, false);
+    const handleItemSelect = (value: string, _item?: CompletionItem) => {
+        // Build full path from navigation
+        const fullPath = navigationPath ? `${navigationPath}.${value}` : value;
+        onChange(fullPath, false);
     }
 
     const handleAddNewVariable = () => {
@@ -200,11 +220,11 @@ export const Variables = (props: VariablesPageProps) => {
         onClose && onClose();
     }
     const handleVariablesMoreIconClick = (value: string) => {
-        navigateToNext(value, currentValue, onChange);
+        navigateToNext(value, navigationPath);
     }
 
     const handleBreadCrumbItemClicked = (step: BreadCrumbStep) => {
-        navigateToBreadcrumb(step, onChange);
+        navigateToBreadcrumb(step);
     }
 
     const ExpandableListItems = () => {
@@ -225,26 +245,6 @@ export const Variables = (props: VariablesPageProps) => {
     }
 
 
-    const getTypeDef = () => {
-        return (
-            {
-                metadata: {
-                    label: "Type",
-                    description: "Type of the variable",
-                },
-                valueType: "TYPE",
-                value: selectedType?.label,
-                placeholder: "var",
-                optional: false,
-                editable: true,
-                advanced: false,
-                hidden: false,
-            }
-        )
-
-    }
-
-
     const selectedNode: FlowNode = {
         codedata: {
             node: 'VARIABLE',
@@ -262,20 +262,32 @@ export const Variables = (props: VariablesPageProps) => {
                     label: "Name",
                     description: "Name of the variable",
                 },
-                valueType: "IDENTIFIER",
+                types: [{ fieldType: "IDENTIFIER", selected: false }],
                 value: "var1",
                 optional: false,
                 editable: true,
                 advanced: false,
                 hidden: false,
             },
-            type: getTypeDef(),
+            type: {
+                metadata: {
+                    label: "Type",
+                    description: "Type of the variable",
+                },
+                types: [{ fieldType: "TYPE", selected: false }],
+                value: selectedType?.label,
+                placeholder: "var",
+                optional: false,
+                editable: true,
+                advanced: false,
+                hidden: false,
+            },
             expression: {
                 metadata: {
                     label: "Expression",
                     description: "Expression of the variable",
                 },
-                valueType: "ACTION_OR_EXPRESSION",
+                types: [{ fieldType: "ACTION_OR_EXPRESSION", selected: false }],
                 value: "",
                 optional: true,
                 editable: true,

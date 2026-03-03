@@ -44,8 +44,13 @@ import {
     ParentMetadata,
     NodeMetadata,
     SearchKind,
-    DataMapperDisplayMode,
+    EditorConfig,
     CodeData,
+    JoinProjectPathRequest,
+    CodeContext,
+    AIPanelPrompt,
+    LinePosition,
+    EditorDisplayMode,
 } from "@wso2/ballerina-core";
 
 import {
@@ -56,6 +61,7 @@ import {
     convertEmbeddingProviderCategoriesToSidePanelCategories,
     convertDataLoaderCategoriesToSidePanelCategories,
     convertChunkerCategoriesToSidePanelCategories,
+    enrichCategoryWithDevant,
     convertKnowledgeBaseCategoriesToSidePanelCategories,
 } from "../../../utils/bi";
 import { useDraftNodeManager } from "./hooks/useDraftNodeManager";
@@ -72,11 +78,12 @@ import { ConnectionKind } from "../../../components/ConnectionSelector";
 import {
     findFlowNodeByModuleVarName,
     getAgentFilePath,
-    removeAgentNode,
     removeToolFromAgentNode,
 } from "../AIChatAgent/utils";
 import { DiagramSkeleton } from "../../../components/Skeletons";
 import { AI_COMPONENT_PROGRESS_MESSAGE, AI_COMPONENT_PROGRESS_MESSAGE_TIMEOUT, GET_DEFAULT_MODEL_PROVIDER, LOADING_MESSAGE } from "../../../constants";
+import { ConnectionListItem } from "@wso2/wso2-platform-core";
+import { usePlatformExtContext } from "../../../providers/platform-ext-ctx-provider";
 
 const Container = styled.div`
     width: 100%;
@@ -85,10 +92,10 @@ const Container = styled.div`
 
 export interface BIFlowDiagramProps {
     projectPath: string;
-    breakpointState?: boolean;
+    breakpointState?: number;
     syntaxTree?: STNode;
     onUpdate: () => void;
-    onReady: (fileName: string, parentMetadata?: ParentMetadata, position?: NodePosition) => void;
+    onReady: (fileName: string, parentMetadata?: ParentMetadata, position?: NodePosition, parentCodedata?: CodeData) => void;
     onSave?: () => void;
 }
 
@@ -102,7 +109,7 @@ interface NavigationStackItem {
 
 export type FormSubmitOptions = {
     closeSidePanel?: boolean;
-    updateLineRange?: boolean;
+    isChangeFromHelperPane?: boolean;
     postUpdateCallBack?: () => void;
 };
 
@@ -114,7 +121,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     const [suggestedModel, setSuggestedModel] = useState<Flow>();
     const [showSidePanel, setShowSidePanel] = useState(false);
     const [sidePanelView, setSidePanelView] = useState<SidePanelView>(SidePanelView.NODE_LIST);
-    const [categories, setCategories] = useState<PanelCategory[]>([]);
+    const [categories, setCategories] = useState<PanelCategory[]>([]); //
     const [fetchingAiSuggestions, setFetchingAiSuggestions] = useState(false);
     const [showProgressIndicator, setShowProgressIndicator] = useState(false);
     const [showProgressSpinner, setShowProgressSpinner] = useState<boolean>(false);
@@ -125,6 +132,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     const [selectedMcpToolkitName, setSelectedMcpToolkitName] = useState<string | undefined>(undefined);
     const [selectedConnectionKind, setSelectedConnectionKind] = useState<ConnectionKind>();
     const [selectedNodeId, setSelectedNodeId] = useState<string>();
+    const [importingConn, setImportingConn] = useState<ConnectionListItem>();
     const [projectOrg, setProjectOrg] = useState<string>("");
     const [isUserAuthenticated, setIsUserAuthenticated] = useState<boolean>(false);
 
@@ -156,6 +164,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     const updatedNodeRef = useRef<FlowNode>(undefined);
     const [targetLineRange, setTargetLineRange] = useState<LineRange>(targetRef?.current);
 
+    const isCreatingAgent = useRef<boolean>(false);
     const isCreatingNewModelProvider = useRef<boolean>(false);
     const isCreatingNewVectorStore = useRef<boolean>(false);
     const isCreatingNewEmbeddingProvider = useRef<boolean>(false);
@@ -163,11 +172,33 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     const isCreatingNewDataLoader = useRef<boolean>(false);
     const isCreatingNewChunker = useRef<boolean>(false);
 
-    useEffect(() => {
-        debouncedGetFlowModel();
-    }, [breakpointState, syntaxTree]);
+    const { platformExtState, platformRpcClient, onLinkDevantProject,  importConnection: importDevantConn } = usePlatformExtContext()
+
+    const enrichedCategories = useMemo(()=>{
+         return  enrichCategoryWithDevant(platformExtState?.devantConns?.list, categories, importingConn)
+    },[platformExtState, categories, importingConn])
+
+    const handleClickImportDevantConn = (data: ConnectionListItem) => {
+        rpcClient.getVisualizerRpcClient().openView({
+            type: EVENT_TYPE.OPEN_VIEW,
+            location: {
+                view: MACHINE_VIEW.AddConnectionWizard,
+                documentUri: model.fileName,
+                metadata: { target: targetRef.current.startLine },
+            },
+            isPopup: true,
+        });
+        importDevantConn.setConnection(data)
+    }
 
     useEffect(() => {
+        debouncedGetFlowModelForBreakpoints();
+    }, [breakpointState]);
+
+    useEffect(() => {
+        rpcClient.onProjectContentUpdated(() => {
+            debouncedGetFlowModel();
+        })
         rpcClient.onParentPopupSubmitted((parent: ParentPopupData) => {
             if (parent.dataMapperMetadata) {
                 // Skip if the parent is a data mapper popup
@@ -191,6 +222,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                 setShowProgressIndicator(true);
                 if (parent.artifactType === DIRECTORY_MAP.CONNECTION) {
                     updateConnectionWithNewItem(parent.recentIdentifier);
+                    platformRpcClient?.refreshConnectionList();
                 }
                 fetchNodesAndAISuggestions(topNodeRef.current, targetRef.current, false, false);
             }
@@ -242,6 +274,14 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
             getFlowModel();
         }, 1000),
         [hasDraft]
+    );
+
+    // Shorter debounce specifically for breakpoint changes (faster feedback)
+    const debouncedGetFlowModelForBreakpoints = useCallback(
+        debounce(() => {
+            getFlowModel();
+        }, 200),
+        []
     );
 
     // Navigation stack helpers
@@ -485,21 +525,26 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                 setBreakpointInfo(response);
                 rpcClient
                     .getBIDiagramRpcClient()
-                    .getFlowModel()
+                    .getFlowModel({})
                     .then((model) => {
                         console.log(">>> BIFlowDiagram getFlowModel", model);
                         if (model?.flowModel) {
+                            const currentSelectedNode = selectedNodeRef.current;
+                            if (
+                                currentSelectedNode &&
+                                typeof currentSelectedNode?.properties?.variable?.value === "string"
+                            ) {
+                                const updatedSelectedNode = searchNodesByStartLine(model.flowModel.nodes, currentSelectedNode?.codedata.lineRange.startLine);
+                                if (updatedSelectedNode) {
+                                    selectedNodeRef.current = updatedSelectedNode;
+                                    setSelectedNodeId(updatedSelectedNode.id);
+                                }
+                            }
                             updateAgentModelTypes(model?.flowModel);
                             setModel(model.flowModel);
-                            const parentMetadata = model.flowModel.nodes.find(
-                                (node) => node.codedata.node === "EVENT_START"
-                            )?.metadata.data as ParentMetadata | undefined;
-
-                            // Get visualizer location and pass position to onReady
-                            rpcClient.getVisualizerLocation().then((location: VisualizerLocation) => {
-                                console.log(">>> Visualizer location", location?.position);
-                                onReady(model.flowModel.fileName, parentMetadata, location?.position);
-                            });
+                            const eventStartNode = model.flowModel.nodes.find((node) => node.codedata.node === "EVENT_START");
+                            const parentMetadata = eventStartNode?.metadata.data as ParentMetadata | undefined;
+                            const parentCodedata = eventStartNode?.codedata;
                             if (shouldUpdateLineRangeRef.current) {
                                 const varName = typeof updatedNodeRef.current?.properties?.variable?.value === "string"
                                     ? updatedNodeRef.current.properties.variable.value
@@ -510,6 +555,11 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                                     endLine: newNode.codedata.lineRange.endLine
                                 })
                             }
+                            // Get visualizer location and pass position to onReady
+                            rpcClient.getVisualizerLocation().then((location: VisualizerLocation) => {
+                                console.log(">>> Visualizer location", location?.position);
+                                onReady(model.flowModel.fileName, parentMetadata, location?.position, parentCodedata);
+                            });
                         }
                     })
                     .finally(() => {
@@ -624,6 +674,13 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
         return node?.properties?.variable?.value === name;
     }
 
+    const findNodeWithStartLine = (node: FlowNode, startLine: LinePosition) => {
+        return (
+            node?.codedata?.lineRange?.startLine.line === startLine.line &&
+            node?.codedata?.lineRange?.startLine.offset === startLine.offset
+        );
+    }
+
     const searchNodesByName = (nodes: FlowNode[], name: string): FlowNode | undefined => {
         for (const node of nodes) {
             if (findNodeWithName(node, name)) {
@@ -639,6 +696,61 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                     }
                 }
             }
+        }
+        return undefined;
+    };
+
+    const searchNodesByStartLine = (nodes: FlowNode[], startLine: LinePosition): FlowNode | undefined => {
+        for (const node of nodes) {
+            if (findNodeWithStartLine(node, startLine)) {
+                return node;
+            }
+            if (node.branches && node.branches.length > 0) {
+                for (const branch of node.branches) {
+                    if (branch.children && branch.children.length > 0) {
+                        const foundNode = searchNodesByStartLine(branch.children, startLine);
+                        if (foundNode) {
+                            return foundNode;
+                        }
+                    }
+                }
+            }
+        }
+        return undefined;
+    };
+
+    const flattenNodes = (nodes: FlowNode[]): FlowNode[] => {
+        const result: FlowNode[] = [];
+        const traverse = (nodeList: FlowNode[]) => {
+            for (const node of nodeList) {
+                result.push(node);
+                if (node.branches && node.branches.length > 0) {
+                    for (const branch of node.branches) {
+                        if (branch.children && branch.children.length > 0) {
+                            traverse(branch.children);
+                        }
+                    }
+                }
+            }
+        };
+        traverse(nodes);
+        return result;
+    };
+
+    const getNodeBefore = (targetNode: FlowNode, nodes: FlowNode[]): FlowNode | undefined => {
+        const flattened = flattenNodes(nodes);
+        const index = flattened.findIndex(node => node.id === targetNode.id);
+        if (index > 0) {
+            return flattened[index - 1];
+        }
+        return undefined;
+    };
+
+    const getNodeAfter = (targetNode: FlowNode, nodes: FlowNode[]): FlowNode | undefined => {
+        const flattened = flattenNodes(nodes);
+        const index = flattened.findIndex(node => node.id === targetNode.id);
+        if (index >= 0 && index < flattened.length - 1) {
+            return flattened[index + 1];
         }
         return undefined;
     };
@@ -772,27 +884,27 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     };
 
     const handleOnAddNodePrompt = (parent: FlowNode | Branch, target: LineRange, prompt: string) => {
-        if (topNodeRef.current || targetRef.current) {
-            closeSidePanelAndFetchUpdatedFlowModel();
-            return;
-        }
-        topNodeRef.current = parent;
-        changeTargetRange(target)
-        // Use hook to save original model for AI suggestions
-        addDraftNode(parent, target);
-        setFetchingAiSuggestions(true);
-        rpcClient
-            .getBIDiagramRpcClient()
-            .getAiSuggestions({ position: target, filePath: model.fileName, prompt })
-            .then((model) => {
-                if (model?.flowModel?.nodes?.length > 0) {
-                    setSuggestedModel(model.flowModel);
-                    suggestedText.current = model.suggestion;
-                }
-            })
-            .finally(() => {
-                setFetchingAiSuggestions(false);
-            });
+        // Create CodeContext from the target position
+        // TODO: Offset seem to be wrong. Investigate further
+        const codeContext: CodeContext = {
+            type: 'addition',
+            position: {
+                line: target.startLine.line,
+                offset: target.startLine.offset
+            },
+            filePath: model.fileName
+        };
+
+        // Create AIPanelPrompt with CodeContext - agent mode is the default
+        const aiPrompt: AIPanelPrompt = {
+            type: 'text',
+            text: prompt || '',
+            planMode: true,
+            codeContext
+        };
+
+        // Use the standard pattern - import from utils/commands
+        rpcClient.getAiPanelRpcClient().openAIPanel(aiPrompt);
     };
 
     const handleSearch = async (searchText: string, functionType: FUNCTION_TYPE, searchKind: SearchKind) => {
@@ -899,7 +1011,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
 
     const updateArtifactLocation = async (artifacts: UpdatedArtifactsResponse) => {
         await rpcClient.getVisualizerRpcClient().updateCurrentArtifactLocation(artifacts);
-        
+
         if (isCreatingNewModelProvider.current) {
             isCreatingNewModelProvider.current = false;
             await handleModelProviderAdded();
@@ -1009,6 +1121,29 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                             )
                         );
                         setSidePanelView(SidePanelView.NP_FUNCTION_LIST);
+                        setShowSidePanel(true);
+                    })
+                    .finally(() => {
+                        setShowProgressIndicator(false);
+                    });
+                break;
+
+            case "AGENTS":
+                setShowProgressIndicator(true);
+                rpcClient
+                    .getBIDiagramRpcClient()
+                    .getAvailableAgents({
+                        position: targetRef.current.startLine,
+                        filePath: model?.fileName || fileName,
+                    })
+                    .then((response) => {
+                        setCategories(
+                            convertFunctionCategoriesToSidePanelCategories(
+                                response.categories as Category[],
+                                FUNCTION_TYPE.REGULAR
+                            )
+                        );
+                        setSidePanelView(SidePanelView.AGENT_LIST);
                         setShowSidePanel(true);
                     })
                     .finally(() => {
@@ -1194,7 +1329,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
 
     const handleOnFormSubmit = (
         updatedNode?: FlowNode,
-        dataMapperMode?: DataMapperDisplayMode,
+        editorConfig?: EditorConfig,
         options?: FormSubmitOptions
     ) => {
         if (!updatedNode) {
@@ -1204,15 +1339,38 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
             return;
         }
         setShowProgressIndicator(true);
-        savingDraft();
+        // TODO: Uncomment this when the draft added with AI agent is implemented
+        // savingDraft(); 
         const noFormSubmitOptions = !options ||
             (
                 options?.closeSidePanel === undefined
-                && options?.updateLineRange === undefined
+                && options?.isChangeFromHelperPane === undefined
                 && options?.postUpdateCallBack === undefined
             );
 
-        if (dataMapperMode && dataMapperMode !== DataMapperDisplayMode.NONE) {
+        if (
+            options?.isChangeFromHelperPane &&
+            selectedNodeRef.current?.codedata &&
+            !selectedNodeRef.current.codedata.isNew
+        ) {
+            const baseStartLine = selectedNodeRef.current.codedata.lineRange.startLine;
+            const safeOffset = Math.max(0, baseStartLine.offset - 1);
+            let targetLine = { ...baseStartLine, offset: safeOffset };
+
+            const nodeBefore = model ? getNodeBefore(selectedNodeRef.current, model.nodes) : undefined;
+            if (nodeBefore && nodeBefore.codedata.lineRange.endLine.line < targetLine.line) {
+                targetLine = nodeBefore.codedata.lineRange.endLine;
+            }
+
+            updatedNode.codedata.lineRange.startLine = targetLine;
+            updatedNode.codedata.lineRange.endLine = targetLine;
+        }
+
+        if (
+            editorConfig &&
+            editorConfig.view === MACHINE_VIEW.InlineDataMapper &&
+            editorConfig.displayMode !== EditorDisplayMode.NONE
+        ) {
             rpcClient
                 .getDataMapperRpcClient()
                 .getInitialIDMSource({
@@ -1224,7 +1382,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                         if (options?.postUpdateCallBack) {
                             options.postUpdateCallBack();
                         }
-                        shouldUpdateLineRangeRef.current = options?.updateLineRange;
+                        shouldUpdateLineRangeRef.current = options?.isChangeFromHelperPane;
                         updatedNodeRef.current = updatedNode;
                         rpcClient.getVisualizerRpcClient().openView({
                             type: EVENT_TYPE.OPEN_VIEW,
@@ -1242,12 +1400,12 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                                     codeData: response.codedata,
                                 }
                             },
-                            isPopup: dataMapperMode === DataMapperDisplayMode.POPUP
+                            isPopup: editorConfig.displayMode === EditorDisplayMode.POPUP
                         });
                     }
                 })
                 .finally(() => {
-                    if (dataMapperMode !== DataMapperDisplayMode.POPUP) setShowSidePanel(false);
+                    if (editorConfig.displayMode !== EditorDisplayMode.POPUP) setShowSidePanel(false);
                     if (options?.postUpdateCallBack) {
                         options.postUpdateCallBack();
                     }
@@ -1255,15 +1413,30 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                 });
             return;
         }
+
         rpcClient
             .getBIDiagramRpcClient()
             .getSourceCode({
                 filePath: model.fileName,
                 flowNode: updatedNode,
-                isFunctionNodeUpdate: dataMapperMode !== DataMapperDisplayMode.NONE,
+                isFunctionNodeUpdate: editorConfig?.displayMode !== EditorDisplayMode.NONE,
+                isHelperPaneChange: options?.isChangeFromHelperPane,
+                artifactData: editorConfig &&
+                    editorConfig.displayMode !== EditorDisplayMode.NONE &&
+                    editorConfig.view === MACHINE_VIEW.DataMapper ?
+                    { artifactType: DIRECTORY_MAP.DATA_MAPPER } : undefined,
             })
             .then(async (response) => {
                 if (response.artifacts.length > 0) {
+
+                    if (editorConfig && editorConfig.displayMode !== EditorDisplayMode.NONE) {
+                        const newArtifact = response.artifacts.find(res => res.isNew);
+                        if (newArtifact) {
+                            rpcClient.getVisualizerRpcClient().openView({ type: EVENT_TYPE.OPEN_VIEW, location: { documentUri: newArtifact.path, position: newArtifact.position } });
+                            return;
+                        }
+                    }
+                
                     if (updatedNode?.codedata?.symbol === GET_DEFAULT_MODEL_PROVIDER
                         || (updatedNode?.codedata?.node === "AGENT_CALL" && updatedNode?.properties?.model?.value === "")) {
                         await rpcClient.getAIAgentRpcClient().configureDefaultModelProvider();
@@ -1279,7 +1452,48 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                     if (options?.postUpdateCallBack) {
                         options.postUpdateCallBack();
                     }
-                    shouldUpdateLineRangeRef.current = options?.updateLineRange;
+                    shouldUpdateLineRangeRef.current = options?.isChangeFromHelperPane;
+                    if (options?.isChangeFromHelperPane) {
+                        const updatedModel = await rpcClient.getBIDiagramRpcClient().getFlowModel({});
+                        if (!updatedModel?.flowModel) {
+                            console.error(">>> Flow model missing after helper-pane update");
+                            return;
+                        }
+
+                        let newTargetLineRange = targetLineRange;
+                        if (!selectedNodeRef.current?.codedata?.isNew) {
+                            const insertedVariableNode = searchNodesByStartLine(
+                                updatedModel.flowModel.nodes,
+                                selectedNodeRef.current.codedata.lineRange.startLine
+                            );
+                            if (!insertedVariableNode) {
+                                console.error(">>> Inserted node not found in updated flow model");
+                                return;
+                            }
+                            const updatedSelectedNode = getNodeAfter(insertedVariableNode, updatedModel.flowModel.nodes);
+                            if (!updatedSelectedNode) {
+                                console.error(">>> Selected node not found in updated flow model");
+                                return;
+                            }
+                            newTargetLineRange = updatedSelectedNode.codedata.lineRange;
+                        } else {
+                            const newNode = searchNodesByName(
+                                updatedModel.flowModel.nodes,
+                                updatedNode.properties?.variable?.value as string
+                            );
+                            if (!newNode || !newTargetLineRange) {
+                                console.error(">>> New node or targetLineRange missing after helper-pane update");
+                                return;
+                            }
+                            newTargetLineRange.startLine = newNode.codedata.lineRange.endLine;
+                            newTargetLineRange.endLine = newNode.codedata.lineRange.endLine;
+                        }
+
+                        if (newTargetLineRange) {
+                            changeTargetRange(newTargetLineRange);
+                        }
+                        shouldUpdateLineRangeRef.current = false;
+                    }
                     updatedNodeRef.current = updatedNode;
                 } else {
                     console.error(">>> Error updating source code", response);
@@ -1302,16 +1516,6 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
         });
         if (deleteNodeResponse.artifacts.length === 0) {
             console.error(">>> Error updating source code", deleteNodeResponse);
-        }
-
-        if (node.codedata.node === "AGENT_CALL") {
-            const agentNodeDeleteResponse = await removeAgentNode(node, rpcClient);
-            if (!agentNodeDeleteResponse) {
-                console.error(">>> Error deleting agent node", node);
-                setShowProgressIndicator(false);
-                debouncedGetFlowModel();
-                return;
-            }
         }
 
         await updateArtifactLocation(deleteNodeResponse);
@@ -1343,7 +1547,6 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                         label: "Comment",
                         description: "Comment to describe the flow",
                     },
-                    valueType: "STRING",
                     value: `\n${comment}\n\n`,
                     optional: false,
                     advanced: false,
@@ -1518,14 +1721,26 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     };
 
     const handleOnAddFunction = () => {
-        rpcClient.getVisualizerRpcClient().openView({
-            type: EVENT_TYPE.OPEN_VIEW,
-            location: {
-                view: MACHINE_VIEW.BIFunctionForm,
-                artifactType: DIRECTORY_MAP.FUNCTION,
-            },
-            isPopup: true,
-        });
+        setShowProgressIndicator(true);
+        pushToNavigationStack(sidePanelView, categories, selectedNodeRef.current, selectedClientName.current);
+
+        rpcClient
+            .getBIDiagramRpcClient()
+            .getNodeTemplate({
+                position: targetRef.current.startLine,
+                filePath: model?.fileName,
+                id: { node: "FUNCTION_CREATION" },
+            })
+            .then((response) => {
+                selectedNodeRef.current = response.flowNode;
+                nodeTemplateRef.current = response.flowNode;
+                showEditForm.current = false;
+                setSidePanelView(SidePanelView.FORM);
+                setShowSidePanel(true);
+            })
+            .finally(() => {
+                setShowProgressIndicator(false);
+            });
     };
 
     const handleOnAddNPFunction = () => {
@@ -1540,14 +1755,27 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     };
 
     const handleOnAddDataMapper = () => {
-        rpcClient.getVisualizerRpcClient().openView({
-            type: EVENT_TYPE.OPEN_VIEW,
-            location: {
-                view: MACHINE_VIEW.BIDataMapperForm,
-                artifactType: DIRECTORY_MAP.DATA_MAPPER,
-            },
-            isPopup: true,
-        });
+
+        setShowProgressIndicator(true);
+        pushToNavigationStack(sidePanelView, categories, selectedNodeRef.current, selectedClientName.current);
+
+        rpcClient
+            .getBIDiagramRpcClient()
+            .getNodeTemplate({
+                position: targetRef.current.startLine,
+                filePath: model?.fileName,
+                id: { node: "DATA_MAPPER_CREATION" },
+            })
+            .then((response) => {
+                selectedNodeRef.current = response.flowNode;
+                nodeTemplateRef.current = response.flowNode;
+                showEditForm.current = false;
+                setSidePanelView(SidePanelView.FORM);
+                setShowSidePanel(true);
+            })
+            .finally(() => {
+                setShowProgressIndicator(false);
+            });
     };
 
     // Common function to handle progress message with timeout
@@ -1563,6 +1791,41 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     const cleanupProgressMessage = (messageTimeout: number) => {
         clearTimeout(messageTimeout);
         setProgressMessage(LOADING_MESSAGE);
+    };
+
+    const handleOnAddNewAgent = () => {
+        isCreatingAgent.current = true;
+        setShowProgressIndicator(true);
+        setShowProgressSpinner(true);
+
+        // Push current state to navigation stack
+        pushToNavigationStack(sidePanelView, categories, selectedNodeRef.current, selectedClientName.current);
+
+        rpcClient
+            .getBIDiagramRpcClient()
+            .getNodeTemplate({
+                position: targetRef.current.startLine,
+                filePath: model?.fileName,
+                id: {
+                    node: "AGENT_CALL",
+                    org: "ballerina",
+                    symbol: "run",
+                    module: "ai",
+                    packageName: "ai",
+                    object: "Agent"
+                },
+            })
+            .then((response) => {
+                selectedNodeRef.current = response.flowNode;
+                nodeTemplateRef.current = response.flowNode;
+                showEditForm.current = false;
+                setSidePanelView(SidePanelView.FORM);
+                setShowSidePanel(true);
+            })
+            .finally(() => {
+                setShowProgressIndicator(false);
+                setShowProgressSpinner(false);
+            });
     };
 
     const handleOnAddNewModelProvider = () => {
@@ -1808,11 +2071,12 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
         suggestedText.current = undefined;
     };
 
-    const handleOpenView = async (filePath: string, position: NodePosition, identifier?: string) => {
+    const handleOpenView = async (location: VisualizerLocation) => {
         const context: VisualizerLocation = {
-            documentUri: filePath,
-            position: position,
-            identifier: identifier,
+            documentUri: location.documentUri,
+            position: location.position,
+            identifier: location.identifier,
+            projectPath: location.projectPath || undefined,
         };
         await rpcClient.getVisualizerRpcClient().openView({ type: EVENT_TYPE.OPEN_VIEW, location: context });
     };
@@ -1865,7 +2129,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
         if (agentMemoryValue) {
             const fileName = agentNode.codedata?.lineRange?.fileName;
             if (fileName) {
-                const filePath = await rpcClient.getVisualizerRpcClient().joinProjectPath(fileName);
+                const filePath = (await rpcClient.getVisualizerRpcClient().joinProjectPath({ segments: [fileName] })).filePath;
                 const startLine = agentNode.codedata?.lineRange?.startLine;
                 const linePosition = startLine
                     ? {
@@ -1916,7 +2180,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                 if (memoryVar) {
                     const memoryNode = await findFlowNodeByModuleVarName(memoryVar, rpcClient);
                     if (memoryNode) {
-                        const memoryFilePath = await rpcClient.getVisualizerRpcClient().joinProjectPath(memoryNode.codedata.lineRange.fileName);
+                        const memoryFilePath = (await rpcClient.getVisualizerRpcClient().joinProjectPath({ segments: [memoryNode.codedata.lineRange.fileName] })).filePath;
                         await rpcClient.getBIDiagramRpcClient().deleteFlowNode({
                             filePath: memoryFilePath,
                             flowNode: memoryNode,
@@ -1927,7 +2191,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
 
             // Remove memory manager from agent node
             agentNode.properties.memory.value = "()";
-            const agentFilePath = await rpcClient.getVisualizerRpcClient().joinProjectPath(agentNode.codedata.lineRange.fileName);
+            const agentFilePath = (await rpcClient.getVisualizerRpcClient().joinProjectPath({ segments: [agentNode.codedata.lineRange.fileName] })).filePath;
             await rpcClient
                 .getBIDiagramRpcClient()
                 .getSourceCode({ filePath: agentFilePath, flowNode: agentNode });
@@ -2074,9 +2338,9 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
         }
 
         // Delete the MCP variable node
-        const mcpVariableFilePath = await rpcClient
+        const mcpVariableFilePath = (await rpcClient
             .getVisualizerRpcClient()
-            .joinProjectPath(mcpVariable.codedata.lineRange.fileName);
+            .joinProjectPath({ segments: [mcpVariable.codedata.lineRange.fileName] })).filePath;
 
         await rpcClient.getBIDiagramRpcClient().deleteFlowNode({
             filePath: mcpVariableFilePath,
@@ -2096,9 +2360,9 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
             return;
         }
 
-        const classFilePath = await rpcClient
+        const classFilePath = (await rpcClient
             .getVisualizerRpcClient()
-            .joinProjectPath(classLineRange.fileName);
+            .joinProjectPath({ segments: [classLineRange.fileName] })).filePath;
 
         await rpcClient.getBIDiagramRpcClient().deleteByComponentInfo({
             filePath: classFilePath,
@@ -2119,9 +2383,9 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
 
         try {
             const agentNode = await findAgentNodeFromAgentCallNode(node, rpcClient);
-            const agentFilePath = await rpcClient
+            const agentFilePath = (await rpcClient
                 .getVisualizerRpcClient()
-                .joinProjectPath(agentNode.codedata.lineRange.fileName);
+                .joinProjectPath({ segments: [agentNode.codedata.lineRange.fileName] })).filePath;
 
             // Remove the tool from the agent node
             const updatedAgentNode = await removeToolFromAgentNode(agentNode, tool.name);
@@ -2169,11 +2433,14 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
             return;
         }
         setShowProgressIndicator(false);
-        handleOpenView(agentFilePath, {
-            startLine: functionInfo.startLine,
-            startColumn: functionInfo.startColumn,
-            endLine: functionInfo.endLine,
-            endColumn: functionInfo.endColumn,
+        handleOpenView({
+            documentUri: agentFilePath,
+            position: {
+                startLine: functionInfo.startLine,
+                startColumn: functionInfo.startColumn,
+                endLine: functionInfo.endLine,
+                endColumn: functionInfo.endColumn,
+            }
         });
     };
 
@@ -2185,8 +2452,8 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
         setSidePanelView(targetPanel);
     };
 
-    const handleGetProjectPath = async (segments: string | string[]) => {
-        return rpcClient.getVisualizerRpcClient().joinProjectPath(segments);
+    const handleGetProjectPath = async (props: JoinProjectPathRequest) => {
+        return rpcClient.getVisualizerRpcClient().joinProjectPath(props);
     };
 
     const flowModel = originalModel && suggestedModel ? suggestedModel : model;
@@ -2269,7 +2536,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                 showSidePanel={showSidePanel}
                 sidePanelView={sidePanelView}
                 subPanel={subPanel}
-                categories={categories}
+                categories={enrichedCategories}
                 selectedNode={selectedNodeRef.current}
                 parentNode={parentNodeRef.current}
                 nodeFormTemplate={nodeTemplateRef.current}
@@ -2317,6 +2584,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                 onSearchChunker={handleSearchChunker}
                 onUpdateNodeWithConnection={updateNodeWithConnection}
                 // AI Agent specific callbacks
+                onAddAgent={handleOnAddNewAgent}
                 onEditAgent={handleEditAgent}
                 onSelectTool={handleOnSelectTool}
                 onDeleteTool={handleOnDeleteTool}
@@ -2325,6 +2593,14 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
                 onSelectNewConnection={handleOnSelectNewConnection}
                 selectedMcpToolkitName={selectedMcpToolkitName}
                 onNavigateToPanel={handleOnNavigateToPanel}
+                // Devant specific callbacks
+                onImportDevantConn={handleClickImportDevantConn}
+                onLinkDevantProject={!platformExtState?.selectedContext?.project ? onLinkDevantProject : undefined}
+                onRefreshDevantConnections={
+                    platformExtState?.selectedContext?.project && !platformExtState?.devantConns?.loading
+                        ? () => platformRpcClient?.refreshConnectionList()
+                        : undefined
+                }
             />
 
             <PanelOverlayRenderer />

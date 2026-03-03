@@ -108,8 +108,6 @@ import {
     VisibleVariableTypes,
     ConfigVariableResponse,
     ConfigVariableRequest,
-    UpdateConfigVariableRequest,
-    UpdateConfigVariableResponse,
     ProjectDiagnosticsRequest,
     ProjectDiagnosticsResponse,
     MainFunctionParamsRequest,
@@ -229,7 +227,6 @@ import {
     DeleteConfigVariableRequestV2,
     DeleteConfigVariableResponseV2,
     ResourceReturnTypesRequest,
-    ResourceReturnTypesResponse,
     JsonToTypeRequest,
     JsonToTypeResponse,
     McpToolsRequest,
@@ -268,7 +265,27 @@ import {
     BISearchNodesRequest,
     BISearchNodesResponse,
     ExpressionTokensRequest,
-    ExpressionTokensResponse
+    ExpressionTokensResponse,
+    ProjectInfoRequest,
+    ProjectInfo,
+    onMigratedProject,
+    ProjectMigrationResult,
+    FieldPropertyRequest,
+    ClausePositionResponse,
+    ClausePositionRequest,
+    SemanticDiffRequest,
+    SemanticDiffResponse,
+    ConvertExpressionRequest,
+    ConvertExpressionResponse,
+    IntrospectDatabaseRequest,
+    IntrospectDatabaseResponse,
+    PersistClientGenerateRequest,
+    PersistClientGenerateResponse,
+    WSDLApiClientGenerationRequest,
+    WSDLApiClientGenerationResponse,
+    CopilotSearchLibrariesBySearchRequest,
+    CopilotSearchLibrariesBySearchResponse,
+    CreateConvertedVariableRequest
 } from "@wso2/ballerina-core";
 import { BallerinaExtension } from "./index";
 import { debug, handlePullModuleProgress } from "../utils";
@@ -338,6 +355,7 @@ enum EXTENDED_APIS {
     BI_VERIFY_TYPE_DELETE = 'typesManager/verifyTypeDelete',
     BI_DELETE_TYPE = 'typesManager/deleteType',
     BI_AVAILABLE_NODES = 'flowDesignService/getAvailableNodes',
+    BI_AVAILABLE_AGENTS = 'flowDesignService/getAvailableAgents',
     BI_AVAILABLE_MODEL_PROVIDERS = 'flowDesignService/getAvailableModelProviders',
     BI_AVAILABLE_VECTOR_STORES = 'flowDesignService/getAvailableVectorStores',
     BI_AVAILABLE_EMBEDDING_PROVIDERS = 'flowDesignService/getAvailableEmbeddingProviders',
@@ -350,6 +368,7 @@ enum EXTENDED_APIS {
     BI_GEN_ERROR_HANDLER = 'flowDesignService/addErrorHandler',
     BI_GET_ENCLOSED_FUNCTION = 'flowDesignService/getEnclosedFunctionDef',
     BI_EXPRESSION_COMPLETIONS = 'expressionEditor/completion',
+    BI_DATA_MAPPER_COMPLETIONS = 'expressionEditor/dataMapperCompletion',
     VISIBLE_VARIABLE_TYPES = 'expressionEditor/visibleVariableTypes',
     DATA_MAPPER_MAPPINGS = 'dataMapper/mappings',
     DATA_MAPPER_GET_SOURCE = 'dataMapper/getSource',
@@ -365,10 +384,12 @@ enum EXTENDED_APIS {
     DATA_MAPPER_MAP_WITH_TRANSFORM_FN = 'dataMapper/transformationFunction',
     DATA_MAPPER_CODEDATA = 'dataMapper/nodePosition',
     DATA_MAPPER_SUB_MAPPING_CODEDATA = 'dataMapper/subMapping',
-    DATA_MAPPER_PROPERTY = 'dataMapper/fieldPosition',
+    DATA_MAPPER_PROPERTY = 'dataMapper/targetFieldPosition',
+    DATA_MAPPER_FIELD_PROPERTY = 'dataMapper/fieldPosition',
+    DATA_MAPPER_CLAUSE_POSITION = 'dataMapper/clausePosition',
     DATA_MAPPER_CLEAR_TYPE_CACHE = 'dataMapper/clearTypeCache',
-    VIEW_CONFIG_VARIABLES = 'configEditor/getConfigVariables',
-    UPDATE_CONFIG_VARIABLES = 'configEditor/updateConfigVariables',
+    DATA_MAPPER_CONVERT_EXPRESSION = 'dataMapper/convertExpression',
+    DATA_MAPPER_CREATE_CONVERTED_VARIABLE = 'dataMapper/convertType',
     VIEW_CONFIG_VARIABLES_V2 = 'configEditorV2/getConfigVariables',
     UPDATE_CONFIG_VARIABLES_V2 = 'configEditorV2/updateConfigVariable',
     DELETE_CONFIG_VARIABLE_V2 = 'configEditorV2/deleteConfigVariable',
@@ -441,6 +462,7 @@ enum EXTENDED_APIS {
     BI_AI_GET_TOOL = 'agentManager/getTool',
     BI_AI_GET_MCP_TOOLS = 'agentManager/getMcpTools',
     BI_AI_GEN_TOOLS = 'agentManager/genTool',
+    BI_GET_SEMANTIC_DIFF = 'copilotAgentService/getSemanticDiff',
     BI_IS_ICP_ENABLED = 'icpService/isIcpEnabled',
     BI_ADD_ICP = 'icpService/addICP',
     BI_DISABLE_ICP = 'icpService/disableICP',
@@ -449,15 +471,21 @@ enum EXTENDED_APIS {
     OPEN_API_GENERATE_CLIENT = 'openAPIService/genClient',
     OPEN_API_GENERATED_MODULES = 'openAPIService/getModules',
     OPEN_API_CLIENT_DELETE = 'openAPIService/deleteModule',
+    PERSIST_DATABASE_INTROSPECTION = 'persistService/introspectDatabase',
+    PERSIST_CLIENT_GENERATE = 'persistService/generatePersistClient',
+    WSDL_API_CLIENT_GENERATE = 'wsdlService/genClient',
+    GET_PROJECT_INFO = 'designModelService/projectInfo',
     GET_ARTIFACTS = 'designModelService/artifacts',
     PUBLISH_ARTIFACTS = 'designModelService/publishArtifacts',
     COPILOT_ALL_LIBRARIES = 'copilotLibraryManager/getLibrariesList',
     COPILOT_FILTER_LIBRARIES = 'copilotLibraryManager/getFilteredLibraries',
+    COPILOT_SEARCH_LIBRARIES = 'copilotLibraryManager/getLibrariesBySearch',
     GET_MIGRATION_TOOLS = 'projectService/getMigrationTools',
     TIBCO_TO_BI = 'projectService/importTibco',
     MULE_TO_BI = 'projectService/importMule',
     MIGRATION_TOOL_STATE = 'projectService/stateCallback',
     MIGRATION_TOOL_LOG = 'projectService/logCallback',
+    PUSH_MIGRATED_PROJECT = 'projectService/pushMigratedProject'
 }
 
 enum EXTENDED_APIS_ORG {
@@ -580,10 +608,26 @@ export class ExtendedLangClient extends LanguageClient implements ExtendedLangCl
                 console.error("Error in MIGRATION_TOOL_LOG handler:", error);
             }
         });
+
+        this.onNotification(EXTENDED_APIS.PUSH_MIGRATED_PROJECT, async (res: ProjectMigrationResult) => {
+            try {
+                RPCLayer._messenger.sendNotification(
+                    onMigratedProject,
+                    { type: "webview", webviewType: VisualizerWebview.viewType },
+                    res
+                );
+            } catch (error) {
+                console.error("Error in PUSH_MIGRATED_PROJECT handler:", error);
+            }
+        });
     }
 
     async getProjectArtifacts(params: ProjectArtifactsRequest): Promise<ProjectArtifacts> {
         return this.sendRequest<ProjectArtifacts>(EXTENDED_APIS.GET_ARTIFACTS, params);
+    }
+
+    async getProjectInfo(params: ProjectInfoRequest): Promise<ProjectInfo> {
+        return this.sendRequest<ProjectInfo>(EXTENDED_APIS.GET_PROJECT_INFO, params);
     }
 
     async definition(params: DefinitionParams): Promise<Location | Location[] | LocationLink[]> {
@@ -668,6 +712,18 @@ export class ExtendedLangClient extends LanguageClient implements ExtendedLangCl
             return Promise.resolve(NOT_SUPPORTED);
         }
         return this.sendRequest<Connector>(EXTENDED_APIS.CONNECTOR_CONNECTOR, params);
+    }
+
+    async introspectDatabase(params: IntrospectDatabaseRequest): Promise<IntrospectDatabaseResponse> {
+        return this.sendRequest<IntrospectDatabaseResponse>(EXTENDED_APIS.PERSIST_DATABASE_INTROSPECTION, params);
+    }
+
+    async generatePersistClient(params: PersistClientGenerateRequest): Promise<PersistClientGenerateResponse> {
+        return this.sendRequest<PersistClientGenerateResponse>(EXTENDED_APIS.PERSIST_CLIENT_GENERATE, params);
+    }
+
+    async generateWSDLApiClient(params: WSDLApiClientGenerationRequest): Promise<WSDLApiClientGenerationResponse> {
+        return this.sendRequest<WSDLApiClientGenerationResponse>(EXTENDED_APIS.WSDL_API_CLIENT_GENERATE, params);
     }
 
     async getRecord(params: RecordParams): Promise<BallerinaRecord | NOT_SUPPORTED_TYPE> {
@@ -820,6 +876,22 @@ export class ExtendedLangClient extends LanguageClient implements ExtendedLangCl
 
     async getProperty(params: PropertyRequest): Promise<PropertyResponse | NOT_SUPPORTED_TYPE> {
         return this.sendRequest<PropertyResponse>(EXTENDED_APIS.DATA_MAPPER_PROPERTY, params);
+    }
+
+    async getFieldProperty(params: FieldPropertyRequest): Promise<PropertyResponse | NOT_SUPPORTED_TYPE> {
+        return this.sendRequest<PropertyResponse>(EXTENDED_APIS.DATA_MAPPER_FIELD_PROPERTY, params);
+    }
+
+    async getClausePosition(params: ClausePositionRequest): Promise<ClausePositionResponse> {
+        return this.sendRequest<ClausePositionResponse>(EXTENDED_APIS.DATA_MAPPER_CLAUSE_POSITION, params);
+    }
+
+    async getConvertedExpression(params: ConvertExpressionRequest): Promise<ConvertExpressionResponse> {
+        return this.sendRequest<ConvertExpressionResponse>(EXTENDED_APIS.DATA_MAPPER_CONVERT_EXPRESSION, params);
+    }
+
+    async createConvertedVariable(params: CreateConvertedVariableRequest): Promise<DataMapperSourceResponse> {
+        return this.sendRequest<DataMapperSourceResponse>(EXTENDED_APIS.DATA_MAPPER_CREATE_CONVERTED_VARIABLE, params);
     }
 
     async clearTypeCache(): Promise<ClearTypeCacheResponse> {
@@ -1026,6 +1098,10 @@ export class ExtendedLangClient extends LanguageClient implements ExtendedLangCl
         return this.sendRequest<BIAvailableNodesResponse>(EXTENDED_APIS.BI_AVAILABLE_NODES, params);
     }
 
+    async getAvailableAgents(params: BIAvailableNodesRequest): Promise<BIAvailableNodesResponse> {
+        return this.sendRequest<BIAvailableNodesResponse>(EXTENDED_APIS.BI_AVAILABLE_AGENTS, params);
+    }
+
     async getAvailableModelProviders(params: BIAvailableNodesRequest): Promise<BIAvailableNodesResponse> {
         return this.sendRequest<BIAvailableNodesResponse>(EXTENDED_APIS.BI_AVAILABLE_MODEL_PROVIDERS, params);
     }
@@ -1060,14 +1136,6 @@ export class ExtendedLangClient extends LanguageClient implements ExtendedLangCl
 
     async generateServiceFromOAS(params: ServiceFromOASRequest): Promise<ServiceFromOASResponse> {
         return this.sendRequest<ServiceFromOASResponse>(EXTENDED_APIS.BI_GEN_OPEN_API, params);
-    }
-
-    async getConfigVariables(params: ConfigVariableRequest): Promise<ConfigVariableResponse> {
-        return this.sendRequest<ConfigVariableResponse>(EXTENDED_APIS.VIEW_CONFIG_VARIABLES, params);
-    }
-
-    async updateConfigVariables(params: UpdateConfigVariableRequest): Promise<UpdateConfigVariableResponse> {
-        return this.sendRequest<UpdateConfigVariableResponse>(EXTENDED_APIS.UPDATE_CONFIG_VARIABLES, params);
     }
 
     async getConfigVariablesV2(params: ConfigVariableRequest): Promise<ConfigVariableResponse> {
@@ -1121,6 +1189,10 @@ export class ExtendedLangClient extends LanguageClient implements ExtendedLangCl
 
     async getExpressionCompletions(params: ExpressionCompletionsRequest): Promise<ExpressionCompletionsResponse> {
         return this.sendRequest<ExpressionCompletionsResponse>(EXTENDED_APIS.BI_EXPRESSION_COMPLETIONS, params);
+    }
+
+    async getDataMapperCompletions(params: ExpressionCompletionsRequest): Promise<ExpressionCompletionsResponse> {
+        return this.sendRequest<ExpressionCompletionsResponse>(EXTENDED_APIS.BI_DATA_MAPPER_COMPLETIONS, params);
     }
 
     async getModuleNodes(params: BIModuleNodesRequest): Promise<BIModuleNodesResponse> {
@@ -1371,6 +1443,10 @@ export class ExtendedLangClient extends LanguageClient implements ExtendedLangCl
         return this.sendRequest<CopilotFilterLibrariesResponse>(EXTENDED_APIS.COPILOT_FILTER_LIBRARIES, params);
     }
 
+    async getCopilotLibrariesBySearch(params: CopilotSearchLibrariesBySearchRequest): Promise<CopilotSearchLibrariesBySearchResponse> {
+        return this.sendRequest<CopilotSearchLibrariesBySearchResponse>(EXTENDED_APIS.COPILOT_SEARCH_LIBRARIES, params);
+    }
+
     async getMigrationTools(): Promise<GetMigrationToolsResponse> {
         return this.sendRequest<GetMigrationToolsResponse>(EXTENDED_APIS.GET_MIGRATION_TOOLS);
     }
@@ -1384,6 +1460,10 @@ export class ExtendedLangClient extends LanguageClient implements ExtendedLangCl
         debug(`Importing Mule to Ballerina: ${JSON.stringify(params)}`);
         return this.sendRequest<ImportIntegrationResponse>(EXTENDED_APIS.MULE_TO_BI, params);
     }
+
+    async getSemanticDiff(params: SemanticDiffRequest): Promise<SemanticDiffResponse> {
+        return this.sendRequest<SemanticDiffResponse>(EXTENDED_APIS.BI_GET_SEMANTIC_DIFF, params);
+    }   
 
     // <------------ BI APIS END --------------->
 

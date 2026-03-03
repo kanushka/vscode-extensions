@@ -16,17 +16,21 @@
  * under the License.
  */
 
-import { Attachment, AttachmentStatus, DiagnosticEntry, DataMapperModelResponse, Mapping, FileChanges, DMModel, SourceFile, repairCodeRequest} from "@wso2/ballerina-core";
+import { Attachment, AttachmentStatus, DiagnosticEntry, DataMapperModelResponse, Mapping, FileChanges, DMModel, SourceFile, repairCodeRequest, RepairedMapping} from "@wso2/ballerina-core";
 import { Position, Range, Uri, workspace, WorkspaceEdit } from 'vscode';
 
 import path from "path";
 import * as fs from 'fs';
 import { AIChatError } from "./utils/errors";
-import { DataMapperRequest, DataMapperResponse, FileData, processDataMapperInput } from "../../../src/features/ai/service/datamapper/context_api";
-import { getAskResponse } from "../../../src/features/ai/service/ask/ask";
+import { processDataMapperInput } from "../../features/ai/data-mapper/context-api";
+import { DataMapperRequest, DataMapperResponse, FileData, RepairedMappings } from "../../features/ai/data-mapper/types";
+import { getAskResponse } from "../../features/ai/ask/index";
 import { MappingFileRecord} from "./types";
-import { generateAutoMappings, generateRepairCode } from "../../../src/features/ai/service/datamapper/datamapper";
+import { generateAutoMappings, generateRepairCode } from "../../features/ai/data-mapper/index";
 import { ArtifactNotificationHandler, ArtifactsUpdated } from "../../utils/project-artifacts-handler";
+import { CopilotEventHandler } from "../../features/ai/utils/events";
+import { VisualizerRpcManager } from "../visualizer/rpc-manager";
+import { renderDatamapper } from "../../../src/views/ai-panel/checkpoint/checkpointUtils";
 
 // const BACKEND_BASE_URL = BACKEND_URL.replace(/\/v2\.0$/, "");
 //TODO: Temp workaround as custom domain seem to block file uploads
@@ -34,38 +38,7 @@ const CONTEXT_UPLOAD_URL_V1 = "https://e95488c8-8511-4882-967f-ec3ae2a0f86f-prod
 // const CONTEXT_UPLOAD_URL_V1 = BACKEND_BASE_URL + "/context-api/v1.0";
 // const ASK_API_URL_V1 = BACKEND_BASE_URL + "/ask-api/v1.0";
 
-export class AIPanelAbortController {
-    private static instance: AIPanelAbortController;
-    private abortController: AbortController;
-
-    private constructor() {
-        this.abortController = new AbortController();
-    }
-
-    public static getInstance(): AIPanelAbortController {
-        if (!AIPanelAbortController.instance) {
-            AIPanelAbortController.instance = new AIPanelAbortController();
-        }
-        return AIPanelAbortController.instance;
-    }
-
-    public get signal(): AbortSignal {
-        return this.abortController.signal;
-    }
-
-    public abort(): void {
-        this.abortController.abort();
-        // Create a new AbortController for the next operation
-        this.abortController = new AbortController();
-    }
-}
-
 // Common functions
-
-// Aborts the current AI panel operation
-export function handleStop() {
-    AIPanelAbortController.getInstance().abort();
-}
 
 // Checks if an error object has both 'code' and 'message' properties
 export function isErrorCode(error: any): boolean {
@@ -111,6 +84,8 @@ export async function addToIntegration(workspaceFolderPath: string, fileChanges:
         }
         fs.writeFileSync(absoluteFilePath, fileChange.content, 'utf8');
     }
+    await renderDatamapper();
+
     return new Promise((resolve, reject) => {
         if (!isBalFileAdded) {
             resolve([]);
@@ -119,6 +94,7 @@ export async function addToIntegration(workspaceFolderPath: string, fileChanges:
         const notificationHandler = ArtifactNotificationHandler.getInstance();
         // Subscribe to artifact updated notifications
         let unsubscribe = notificationHandler.subscribe(ArtifactsUpdated.method, undefined, async (payload) => {
+            new VisualizerRpcManager().updateCurrentArtifactLocation({ artifacts: payload.data });
             clearTimeout(timeoutId);
             resolve(payload.data);
             unsubscribe();
@@ -150,18 +126,21 @@ async function convertAttachmentToFileData(attachment: Attachment): Promise<File
 
 // Datamapper related functions
 
-// Processes data mapper model and optional mapping instruction file to generate mapping expressions
+// Processes data mapper model and optional mapping instruction files to generate mapping expressions
 export async function generateMappingExpressionsFromModel(
     dataMapperModel: DMModel,
-    mappingInstructionFile?: Attachment
+    mappingInstructionFiles: Attachment[] = [],
+    eventHandler: CopilotEventHandler
 ): Promise<Mapping[]> {
     let dataMapperResponse: DataMapperModelResponse = {
         mappingsModel: dataMapperModel as DMModel
     };
-    if (mappingInstructionFile) {
-        const enhancedResponse = await enrichModelWithMappingInstructions(mappingInstructionFile, dataMapperResponse);
+    if (mappingInstructionFiles.length > 0) {
+        eventHandler({ type: "content_block", content: "\n<progress>Processing mapping hints from attachments...</progress>" });
+        const enhancedResponse = await enrichModelWithMappingInstructions(mappingInstructionFiles, dataMapperResponse);
         dataMapperResponse = enhancedResponse as DataMapperModelResponse;
     }
+    eventHandler({ type: "content_block", content: "\n<progress>Generating data mappings...</progress>" });
 
     const generatedMappings = await generateAutoMappings(dataMapperResponse);
     return generatedMappings.map(mapping => ({
@@ -172,12 +151,16 @@ export async function generateMappingExpressionsFromModel(
     }));
 }
 
-// Processes a mapping instruction file and merges it with the existing data mapper model
-export async function enrichModelWithMappingInstructions(mappingInstructionFile: Attachment, currentDataMapperResponse: DataMapperModelResponse): Promise<DataMapperModelResponse> {
-    if (!mappingInstructionFile) { return currentDataMapperResponse; }
-    const fileData = await convertAttachmentToFileData(mappingInstructionFile);
+// Processes mapping instruction files and merges them with the existing data mapper model
+export async function enrichModelWithMappingInstructions(mappingInstructionFiles: Attachment[], currentDataMapperResponse: DataMapperModelResponse): Promise<DataMapperModelResponse> {
+    if (!mappingInstructionFiles || mappingInstructionFiles.length === 0) { return currentDataMapperResponse; }
+
+    const fileDataArray = await Promise.all(
+        mappingInstructionFiles.map(file => convertAttachmentToFileData(file))
+    );
+
     const requestParams: DataMapperRequest = {
-        file: fileData,
+        files: fileDataArray,
         processType: "mapping_instruction"
     };
     const response: DataMapperResponse = await processDataMapperInput(requestParams);
@@ -192,11 +175,11 @@ export async function enrichModelWithMappingInstructions(mappingInstructionFile:
     };
 }
 
-// Processes a repair request and returns the repaired source files using AI
-export async function repairSourceFilesWithAI(codeRepairRequest: repairCodeRequest): Promise<SourceFile[]> {
+// Processes a repair request and returns the repaired mappings using AI
+export async function repairSourceFilesWithAI(codeRepairRequest: repairCodeRequest): Promise<{ repairedMappings: RepairedMapping[] }> {
     try {
         const repairResponse = await generateRepairCode(codeRepairRequest);
-        return repairResponse.repairedFiles;
+        return { repairedMappings: repairResponse.repairedMappings };
     } catch (error) {
         console.error(error);
         throw error;
@@ -206,12 +189,18 @@ export async function repairSourceFilesWithAI(codeRepairRequest: repairCodeReque
 // Type Creator related functions
 
 // Extracts type definitions from a file attachment and generates Ballerina record definitions
-export async function extractRecordTypeDefinitionsFromFile(sourceFile: Attachment): Promise<string> {
-    if (!sourceFile) { throw new Error("File is undefined"); }
+export async function extractRecordTypeDefinitionsFromFile(sourceFiles: Attachment[]): Promise<string> {
+    if (sourceFiles.length === 0) {
+        throw new Error("No files provided");
+    }
 
-    const fileData = await convertAttachmentToFileData(sourceFile);
+    // Process all files together to understand correlations
+    const fileDataArray = await Promise.all(
+        sourceFiles.map(attachment => convertAttachmentToFileData(attachment))
+    );
+
     const requestParams: DataMapperRequest = {
-        file: fileData,
+        files: fileDataArray,
         processType: "records"
     };
     const response: DataMapperResponse = await processDataMapperInput(requestParams);
@@ -230,7 +219,7 @@ export async function requirementsSpecification(filepath: string): Promise<strin
         content: convertFileToBase64(filepath), status: AttachmentStatus.UnknownError
     });
     const params: DataMapperRequest = {
-        file: fileData,
+        files: [fileData],
         processType: "requirements",
         isRequirementAnalysis: true
     };

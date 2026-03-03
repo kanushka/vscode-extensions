@@ -19,6 +19,8 @@
 import { NodePosition } from "@wso2/syntax-tree";
 import { LinePosition } from "./common";
 import { Diagnostic as VSCodeDiagnostic } from "vscode-languageserver-types";
+import { ValueTypeConstraint } from "../rpc-types/ai-agent/interfaces";
+import { Type } from "./extended-lang-client";
 
 export type { NodePosition };
 
@@ -81,6 +83,7 @@ export type Metadata = {
 export type NodeMetadata = {
     isDataMappedFunction?: boolean;
     isAgentTool?: boolean;
+    connectorType?: string;
     isIsolatedFunction?: boolean;
     tools?: ToolData[];
     model?: ToolData;
@@ -121,10 +124,106 @@ export type Imports = {
     [prefix: string]: string;
 };
 
+export type FormFieldInputType = "TEXT" |
+    "BOOLEAN" |
+    "IDENTIFIER" |
+    "AUTOCOMPLETE" |
+    "SINGLE_SELECT" |
+    "MULTIPLE_SELECT" |
+    "TEXTAREA" |
+    "TEMPLATE" |
+    "TYPE" |
+    "EXPRESSION" |
+    "REPEATABLE_PROPERTY" |
+    "PARAM_MANAGER" |
+    "STRING" |
+    "FILE_SELECT" |
+    "ACTION_OR_EXPRESSION" |
+    "MULTIPLE_SELECT_LISTENER" |
+    "SINGLE_SELECT_LISTENER" |
+    "EXPRESSION_SET" |
+    "TEXT_SET" |
+    "FLAG" |
+    "CHOICE" |
+    "LV_EXPRESSION" |
+    "RAW_TEMPLATE" |
+    "ai:Prompt" |
+    "FIXED_PROPERTY" |
+    "REPEATABLE_PROPERTY" |
+    "ENUM" |
+    "DM_JOIN_CLAUSE_RHS_EXPRESSION" |
+    "RECORD_MAP_EXPRESSION" |
+    "REPEATABLE_MAP" |
+    "PROMPT" |
+    "RECORD_FIELD_SELECTOR" |
+    "SQL_QUERY" |
+    "CLAUSE_EXPRESSION" |
+    "SLIDER" |
+    "HEADER_SET" |
+    "DROPDOWN_CHOICE" |
+    "CUSTOM_DROPDOWN" |
+    "ACTION_TYPE" |
+    "ACTION_EXPRESSION" |
+    "VIEW" |
+    "SERVICE_PATH" |
+    "ACTION_PATH" |
+    "NUMBER" |
+    "REPEATABLE_LIST" |
+    "CONDITIONAL_FIELDS" |
+    "DOC_TEXT"
+    ;
+
+export interface BaseType {
+    fieldType: FormFieldInputType;
+    ballerinaType?: string;
+    selected: boolean;
+    typeMembers?: PropertyTypeMemberInfo[];
+    minItems?: number; // minimum items for EXPRESSION_SET fields
+    defaultItems?: number; // default number of items for EXPRESSION_SET fields
+    pattern?: string; // regex pattern for validation (e.g., for TEXT fields)
+    patternErrorMessage?: string; // custom error message when pattern validation fails
+}
+
+export interface EnumOptions {
+    label: string;
+    value: string;
+}
+
+export interface DropdownType extends BaseType {
+    fieldType: "SINGLE_SELECT" | "MULTIPLE_SELECT";
+    options: EnumOptions[];
+}
+
+export interface TemplateType extends BaseType {
+    template: Property | ValueTypeConstraint;
+}
+
+export interface IdentifierType extends BaseType {
+    fieldType: "IDENTIFIER";
+    scope: FieldScope;
+}
+
+export interface RecordFieldSelectorType extends BaseType {
+    fieldType: "RECORD_FIELD_SELECTOR";
+    recordSelectorType: RecordSelectorType;
+}
+
+export interface RecordSelectorType {
+    rootType: Type;
+    referencedTypes: Type[];
+}
+
+
+export type InputType =
+    | BaseType
+    | DropdownType
+    | TemplateType
+    | IdentifierType
+    | RecordFieldSelectorType;
+
 export type Property = {
     metadata: Metadata;
     diagnostics?: Diagnostic;
-    valueType: string;
     value: string | string[] | ELineRange | NodeProperties | Property[];
     advanceProperties?: NodeProperties;
     optional: boolean;
@@ -132,9 +231,8 @@ export type Property = {
     advanced?: boolean;
     hidden?: boolean;
     placeholder?: string;
-    valueTypeConstraint?: string | string[];
+    types?: InputType[];
     codedata?: CodeData;
-    typeMembers?: PropertyTypeMemberInfo[];
     imports?: Imports;
     advancedValue?: string;
     modified?: boolean;
@@ -256,21 +354,50 @@ export enum FUNCTION_TYPE {
     ALL = "all",
 }
 
-export interface ProjectStructureResponse {
+/**
+ * Represents the directory structure of artifacts in a project.
+ */
+export type ProjectDirectoryMap = {
+    [DIRECTORY_MAP.SERVICE]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.AUTOMATION]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.LISTENER]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.FUNCTION]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.CONNECTION]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.TYPE]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.CONFIGURABLE]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.DATA_MAPPER]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.NP_FUNCTION]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.AGENTS]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.LOCAL_CONNECTORS]: ProjectStructureArtifactResponse[];
+};
+
+/**
+ * Represents a single project's structure with its artifacts organized by directory type.
+ */
+export interface ProjectStructure {
     projectName: string;
-    directoryMap: {
-        [DIRECTORY_MAP.SERVICE]: ProjectStructureArtifactResponse[];
-        [DIRECTORY_MAP.AUTOMATION]: ProjectStructureArtifactResponse[];
-        [DIRECTORY_MAP.LISTENER]: ProjectStructureArtifactResponse[];
-        [DIRECTORY_MAP.FUNCTION]: ProjectStructureArtifactResponse[];
-        [DIRECTORY_MAP.CONNECTION]: ProjectStructureArtifactResponse[];
-        [DIRECTORY_MAP.TYPE]: ProjectStructureArtifactResponse[];
-        [DIRECTORY_MAP.CONFIGURABLE]: ProjectStructureArtifactResponse[];
-        [DIRECTORY_MAP.DATA_MAPPER]: ProjectStructureArtifactResponse[];
-        [DIRECTORY_MAP.NP_FUNCTION]: ProjectStructureArtifactResponse[];
-        [DIRECTORY_MAP.AGENTS]: ProjectStructureArtifactResponse[];
-        [DIRECTORY_MAP.LOCAL_CONNECTORS]: ProjectStructureArtifactResponse[];
-    };
+    projectPath?: string;
+    projectTitle?: string;
+    isLibrary?: boolean;
+    directoryMap: ProjectDirectoryMap;
+}
+
+/**
+ * Unified response structure for both single projects and multi-project workspaces.
+ * 
+ * For single project:
+ * - workspaceName: undefined
+ * - projects: array with single project
+ * 
+ * For workspace with multiple projects:
+ * - workspaceName: name of the workspace
+ * - projects: array with multiple projects
+ */
+export interface ProjectStructureResponse {
+    workspaceName?: string;
+    workspaceTitle?: string;
+    workspacePath?: string;
+    projects: ProjectStructure[];
 }
 
 export interface ProjectStructureArtifactResponse {
@@ -308,6 +435,7 @@ export type DiagramLabel = "On Fail" | "Body";
 
 export type NodePropertyKey =
     | "agentType"
+    | "auth"
     | "checkError"
     | "client"
     | "collection"
@@ -347,6 +475,8 @@ export type NodePropertyKey =
     | "store"
     | "systemPrompt"
     | "targetType"
+    | "testConfigValue"
+    | "toolKitName"
     | "tools"
     | "type"
     | "typeDescription"
@@ -362,10 +492,14 @@ export type Repeatable = "ONE_OR_MORE" | "ZERO_OR_ONE" | "ONE" | "ZERO_OR_MORE";
 
 export type Scope = "module" | "local" | "object";
 
+export type FieldScope = "Global" | "Local" | "Object";
+
 export type NodeKind =
     | "ACTION_OR_EXPRESSION"
+    | "AGENTS"
     | "AGENT"
     | "AGENT_CALL"
+    | "AGENT_RUN"
     | "ASSIGN"
     | "AUTOMATION"
     | "BODY"
@@ -379,6 +513,7 @@ export type NodeKind =
     | "CONTINUE"
     | "DATA_MAPPER_CALL"
     | "DATA_MAPPER_DEFINITION"
+    | "DATA_MAPPER_CREATION"
     | "DRAFT"
     | "ELSE"
     | "EMPTY"
@@ -391,6 +526,7 @@ export type NodeKind =
     | "FUNCTION"
     | "FUNCTION_CALL"
     | "FUNCTION_DEFINITION"
+    | "FUNCTION_CREATION"
     | "IF"
     | "INCLUDED_FIELD"
     | "LOCK"

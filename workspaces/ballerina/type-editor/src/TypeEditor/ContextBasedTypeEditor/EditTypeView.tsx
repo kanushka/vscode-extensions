@@ -20,7 +20,7 @@ import React, { useCallback, useContext, useEffect, useRef, useState } from "rea
 import { TextField, Dropdown, Button, ProgressRing, Icon, Typography, ThemeColors } from "@wso2/ui-toolkit";
 import styled from "@emotion/styled";
 import { useRpcContext } from "@wso2/ballerina-rpc-client";
-import { Member, Type, TypeNodeKind } from "@wso2/ballerina-core";
+import { FormFieldInputType, Member, Type, TypeNodeKind } from "@wso2/ballerina-core";
 import { RecordEditor } from "../RecordEditor";
 import { EnumEditor } from "../EnumEditor";
 import { UnionEditor } from "../UnionEditor";
@@ -344,10 +344,10 @@ export function EditTypeView(props: EditTypeViewProps) {
             return;
         }
 
-        const projectUri = await rpcClient.getVisualizerLocation().then((res) => res.projectUri);
+        const projectPath = await rpcClient.getVisualizerLocation().then((res) => res.projectPath);
 
         const endPosition = await rpcClient.getBIDiagramRpcClient().getEndOfFile({
-            filePath: Utils.joinPath(URI.file(projectUri), 'types.bal').fsPath
+            filePath: Utils.joinPath(URI.file(projectPath), 'types.bal').fsPath
         });
 
         const response = await rpcClient.getBIDiagramRpcClient().getExpressionDiagnostics({
@@ -377,16 +377,15 @@ export function EditTypeView(props: EditTypeViewProps) {
                 property: type?.properties["name"] ?
                     {
                         ...type.properties["name"],
-                        valueTypeConstraint: "Global"
+                        types: [{ fieldType:  type.properties["name"].valueType, scope: "Global" , selected: false}]
                     } :
                     {
                         metadata: {
                             label: "",
                             description: "",
                         },
-                        valueType: "IDENTIFIER",
                         value: "",
-                        valueTypeConstraint: "Global",
+                        types: [{ fieldType: "IDENTIFIER", scope: "Global", selected: false}],
                         optional: false,
                         editable: true
                     }

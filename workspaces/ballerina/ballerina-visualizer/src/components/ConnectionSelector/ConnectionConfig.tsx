@@ -24,23 +24,21 @@ import { FormGeneratorNew } from "../../views/BI/Forms/FormGeneratorNew";
 import { RelativeLoader } from "../RelativeLoader";
 import { ConnectionConfigProps } from "./types";
 import { getConnectionKindConfig } from "./config";
-import { createConnectionSelectField, fetchConnectionForNode, updateNodeWithConnectionVariable } from "./utils";
+import { createConnectionSelectField, fetchConnectionValueForNode, updateNodeWithConnectionVariable } from "./utils";
 import { LoaderContainer } from "../RelativeLoader/styles";
-import { URI, Utils } from "vscode-uri";
-import { CONNECTIONS_FILE } from "../../constants";
 
 export function ConnectionConfig(props: ConnectionConfigProps): JSX.Element {
-    const { connectionKind, selectedNode, onSave, onNavigateToSelectionList } = props;
+    const { fileName, connectionKind, selectedNode, onSave, onNavigateToSelectionList } = props;
     const config = useMemo(() => getConnectionKindConfig(connectionKind), [connectionKind]);
     const { rpcClient } = useRpcContext();
 
-    const [selectedConnection, setSelectedConnection] = useState<FlowNode>();
+    const [selectedConnectionValue, setSelectedConnectionValue] = useState<string>();
     const [selectedConnectionFields, setSelectedConnectionFields] = useState<FormField[]>([]);
     const [loading, setLoading] = useState<boolean>(false);
     const [savingForm, setSavingForm] = useState<boolean>(false);
 
     const projectPath = useRef<string>("");
-    const connectionsFilePath = useRef<string>("");
+    const currentFilePath = useRef<string>("");
     const targetLineRangeRef = useRef<LineRange | undefined>(undefined);
 
     useEffect(() => {
@@ -48,45 +46,42 @@ export function ConnectionConfig(props: ConnectionConfigProps): JSX.Element {
     }, []);
 
     useEffect(() => {
-        if (selectedConnection) {
+        if (selectedConnectionValue !== undefined) {
             renderFormField();
         }
-    }, [selectedConnection]);
+    }, [selectedConnectionValue]);
 
     const initPanel = async () => {
         setLoading(true);
-        projectPath.current = await rpcClient.getVisualizerLocation().then((location) => location.projectUri);
-        connectionsFilePath.current = Utils.joinPath(URI.file(projectPath.current), CONNECTIONS_FILE).fsPath;
-        
-        if (!selectedNode?.codedata?.lineRange || selectedNode?.codedata?.node === "NP_FUNCTION") {
-            const endPosition = await rpcClient.getBIDiagramRpcClient().getEndOfFile({
-                filePath: connectionsFilePath.current
-            });
-            targetLineRangeRef.current = {
-                startLine: {
-                    line: endPosition.line,
-                    offset: endPosition.offset
-                },
-                endLine: {
-                    line: endPosition.line,
-                    offset: endPosition.offset
-                }
-            };
-        } else {
-            targetLineRangeRef.current = selectedNode.codedata.lineRange;
-        }
-        
+        projectPath.current = await rpcClient.getVisualizerLocation().then((location) => location.projectPath);
+        currentFilePath.current = fileName;
+
+
+        const endPosition = await rpcClient.getBIDiagramRpcClient().getEndOfFile({
+            filePath: currentFilePath.current
+        });
+        targetLineRangeRef.current = {
+            startLine: {
+                line: endPosition.line,
+                offset: endPosition.offset
+            },
+            endLine: {
+                line: endPosition.line,
+                offset: endPosition.offset
+            }
+        };
+
         await fetchSelectedConnection();
         setLoading(false);
     };
 
     const fetchSelectedConnection = async () => {
-        const connection = await fetchConnectionForNode(rpcClient, connectionKind, selectedNode);
-        setSelectedConnection(connection);
+        const connection = await fetchConnectionValueForNode(connectionKind, selectedNode);
+        setSelectedConnectionValue(connection);
     };
 
     const renderFormField = () => {
-        const connectionSelectField = createConnectionSelectField(selectedConnection, config, onCreateNewConnection);
+        const connectionSelectField = createConnectionSelectField(selectedConnectionValue, config, onCreateNewConnection);
         setSelectedConnectionFields([connectionSelectField]);
     };
 
@@ -110,8 +105,8 @@ export function ConnectionConfig(props: ConnectionConfigProps): JSX.Element {
             {!loading && selectedConnectionFields?.length > 0 && (
                 <>
                     <FormGeneratorNew
-                        key={selectedConnection?.id}
-                        fileName={projectPath.current}
+                        key={selectedConnectionValue}
+                        fileName={currentFilePath.current || projectPath.current}
                         targetLineRange={targetLineRangeRef.current}
                         fields={selectedConnectionFields}
                         onSubmit={handleOnSave}
@@ -120,8 +115,7 @@ export function ConnectionConfig(props: ConnectionConfigProps): JSX.Element {
                         helperPaneSide="left"
                     />
                 </>
-            )
-            }
+            )}
         </>
     );
 }

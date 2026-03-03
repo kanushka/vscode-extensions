@@ -19,9 +19,6 @@ import {
     CodeData,
     ELineRange,
     Flow,
-    AllDataMapperSourceRequest,
-    DataMapperSourceRequest,
-    DataMapperSourceResponse,
     NodePosition,
     ProjectStructureArtifactResponse,
     TextEdit,
@@ -34,7 +31,9 @@ import {
     IORoot,
     ExpandModelOptions,
     ExpandedDMModel,
-    MACHINE_VIEW
+    MACHINE_VIEW,
+    IntermediateClauseType,
+    InputCategory
 } from "@wso2/ballerina-core";
 import { updateSourceCode, UpdateSourceCodeRequest } from "../../utils";
 import { StateMachine, updateDataMapperView } from "../../stateMachine";
@@ -116,7 +115,7 @@ export async function updateSourceCodeIteratively(updateSourceCodeRequest: Updat
     const filePaths = Object.keys(textEdits);
 
     if (filePaths.length == 1) {
-        return await updateSourceCode({ ...updateSourceCodeRequest, description: 'Data Mapper Update' });
+        return await updateSourceCode({ ...updateSourceCodeRequest, description: 'Data Mapper Update' }, undefined, true);
     }
 
     // TODO: Remove this once the designModelService/publishArtifacts API supports simultaneous file changes
@@ -139,7 +138,7 @@ export async function updateSourceCodeIteratively(updateSourceCodeRequest: Updat
 
     let updatedArtifacts: ProjectStructureArtifactResponse[];
     for (const request of requests) {
-        updatedArtifacts = await updateSourceCode({ ...request, description: 'Data Mapper Update' });
+        updatedArtifacts = await updateSourceCode({ ...request, description: 'Data Mapper Update' }, undefined, true);
     }
 
     return updatedArtifacts;
@@ -165,7 +164,7 @@ export async function updateSource(
         const updatedArtifacts = await updateSourceCodeIteratively({ textEdits });
 
         // Find the artifact that contains our code changes
-        const relevantArtifact = findRelevantArtifact(updatedArtifacts, filePath, codedata.lineRange);
+        const relevantArtifact = findRelevantArtifact(updatedArtifacts, filePath, varName, codedata.lineRange);
         if (!relevantArtifact) {
             throw new Error(`No artifact found for file: ${filePath} within the specified line range`);
         }
@@ -217,7 +216,7 @@ export async function updateSubMappingSource(
     name: string
 ): Promise<CodeData> {
     try {
-        await updateSourceCode({ textEdits: textEdits, description: 'Sub Mapping Update' });
+        await updateSourceCode({ textEdits: textEdits, description: 'Sub Mapping Update' }, undefined, true);
         return await fetchSubMappingCodeData(filePath, codedata, name);
     } catch (error) {
         console.error(`Failed to update source for sub mapping "${name}" in ${filePath}:`, error);
@@ -232,17 +231,22 @@ export async function updateSubMappingSource(
 function findRelevantArtifact(
     artifacts: ProjectStructureArtifactResponse[],
     filePath: string,
-    lineRange: ELineRange
+    identifier: string,
+    lineRange: ELineRange,
 ): ProjectStructureArtifactResponse | null {
     if (!artifacts || artifacts.length === 0) {
         return null;
     }
 
     for (const currentArtifact of artifacts) {
-        if (isWithinArtifact(currentArtifact.path, filePath, currentArtifact.position, lineRange)) {
+        if (currentArtifact.type === "DATA_MAPPER") {
+            if (currentArtifact.name === identifier) {
+                return currentArtifact;
+            }
+        } else if (isWithinArtifact(currentArtifact.path, filePath, currentArtifact.position, lineRange)) {
             // If this artifact has resources, recursively search for a more specific match
             if (currentArtifact.resources && currentArtifact.resources.length > 0) {
-                const nestedMatch = findRelevantArtifact(currentArtifact.resources, filePath, lineRange);
+                const nestedMatch = findRelevantArtifact(currentArtifact.resources, filePath, identifier, lineRange);
                 // Return the nested match if found, otherwise return the current artifact
                 return nestedMatch || currentArtifact;
             }
@@ -263,7 +267,7 @@ async function getFlowModelForArtifact(artifact: ProjectStructureArtifactRespons
         const flowModelResponse = await StateMachine
             .langClient()
             .getFlowModel({
-                filePath,
+                filePath: filePath,
                 startLine: {
                     line: artifact.position.startLine,
                     offset: artifact.position.startColumn
@@ -467,7 +471,8 @@ export function expandDMModel(
         query: model.query,
         source: "",
         rootViewId,
-        triggerRefresh: model.triggerRefresh
+        triggerRefresh: model.triggerRefresh,
+        focusInputRootMap: model.focusInputRootMap
     };
 }
 
@@ -477,21 +482,64 @@ export function expandDMModel(
  */
 function processInputRoots(model: DMModel): IOType[] {
     const inputs: IORoot[] = [];
+    const moduleLevelInputs: IORoot[] = [];
     const focusInputs: Record<string, IOTypeField> = {};
     for (const input of model.inputs) {
-        if (input.focusExpression) {
+        if (input.focusExpression && (input.isIterationVariable || input.isSeq || input.isGroupingKey)) {
             focusInputs[input.focusExpression] = input as IOTypeField;
+        } else if (isModuleLevelInput(input)) {
+            moduleLevelInputs.push(input);
         } else {
             inputs.push(input);
         }
     }
+
+    model.focusInputRootMap = {};
     const preProcessedModel: DMModel = {
         ...model,
         inputs,
         focusInputs
     };
 
-    return inputs.map(input => processIORoot(input, preProcessedModel));
+    const processedInputs = inputs.map(input => {
+        preProcessedModel.traversingRoot = input.name;
+        return processIORoot(input, preProcessedModel);
+    });
+
+    return moduleLevelInputs.length
+        ? [buildModuleLevelInputsGroup(moduleLevelInputs, preProcessedModel), ...processedInputs]
+        : processedInputs;
+}
+
+/** 
+ * Checks if the given input is a module level input
+ */
+function isModuleLevelInput(input: IORoot): boolean {
+    return input.category === InputCategory.Constant
+        || input.category === InputCategory.Configurable
+        || input.category === InputCategory.ModuleVariable
+        || input.category === InputCategory.Enum;
+}
+
+/**
+ * Builds an IOType to group module level inputs
+ */
+function buildModuleLevelInputsGroup(moduleLevelInputs: IORoot[], model: DMModel): IOType {
+    
+    const id = "MODULE_LEVEL_INPUTS$"; // Suffix $ to avoid conflicts with user defined names and special case port handling
+    model.traversingRoot = id;
+    const fields = moduleLevelInputs.map(input => {
+        model.focusInputRootMap[input.name] = model.traversingRoot;
+        return processIORoot(input, model);
+    });
+
+    return {
+        id,
+        name: id,
+        displayName: "Global Inputs",
+        kind: TypeKind.Record,
+        fields
+    };
 }
 
 /**
@@ -533,6 +581,17 @@ function processTypeKind(
                 return processTypeReference(type.ref, parentId, model, visitedRefs);
             }
             break;
+        case TypeKind.Json:
+        case TypeKind.Xml:
+            if (type.convertedVariable) {
+                return {
+                    convertedField: processConvertedVariable(type.convertedVariable, model, visitedRefs)
+                };
+            } else if (type.fields) {
+                return {
+                    fields: processTypeFields(type as RecordType, parentId, model, visitedRefs)
+                };
+            }
     }
     return {};
 }
@@ -563,7 +622,7 @@ function createBaseIOType(root: IORoot): IOType {
         typeName: root.typeName,
         kind: root.kind,
         ...(root.category && { category: root.category }),
-        ...(root.optional !== undefined && { optional: root.optional }),
+        ...(root.optional && { optional: root.optional }),
         ...(root.typeInfo && { typeInfo: root.typeInfo })
     };
 
@@ -573,7 +632,7 @@ function createBaseIOType(root: IORoot): IOType {
             name: member.displayName || member.name,
             typeName: member.typeName,
             kind: member.kind,
-            ...(member.optional !== undefined && { optional: member.optional })
+            ...(member.optional && { optional: member.optional })
         }));
     }
 
@@ -592,6 +651,9 @@ function processArray(
     let fieldId = generateFieldId(parentId, member.name);
 
     let isFocused = false;
+    let isGroupByIdUpdated = false;
+    const prevGroupById = model.groupById;
+
     if (model.focusInputs) {
         const focusMember = model.focusInputs[parentId];
         if (focusMember) {
@@ -599,6 +661,15 @@ function processArray(
             parentId = member.name;
             fieldId = member.name;
             isFocused = true;
+            model.focusInputRootMap[fieldId] = model.traversingRoot;
+
+            if(member.isSeq && model.query!.fromClause.properties.name === fieldId){
+                const groupByClause = model.query!.intermediateClauses?.find(clause => clause.type === IntermediateClauseType.GROUP_BY);
+                if(groupByClause){
+                    model.groupById = groupByClause.properties.name;
+                    isGroupByIdUpdated = true;
+                }
+            }
         }
     }
 
@@ -609,11 +680,15 @@ function processArray(
         typeName: member.typeName!,
         kind: member.kind,
         ...(isFocused && { isFocused }),
-        ...(member.optional !== undefined && { optional: member.optional }),
+        ...(member.optional && { optional: member.optional }),
         ...(member.typeInfo && { typeInfo: member.typeInfo })
     };
 
     const typeSpecificProps = processTypeKind(member, parentId, model, visitedRefs);
+
+    if(isGroupByIdUpdated){
+        model.groupById = prevGroupById;
+    }
 
     return {
         ...ioType,
@@ -644,7 +719,7 @@ function processUnion(
             displayName: unionMember.displayName,
             typeName: unionMember.typeName,
             kind: unionMember.kind,
-            ...(unionMember.optional !== undefined && { optional: unionMember.optional }),
+            ...(unionMember.optional && { optional: unionMember.optional }),
             ...(unionMember.typeInfo && { typeInfo: unionMember.typeInfo })
         };
 
@@ -655,6 +730,34 @@ function processUnion(
             ...typeSpecificProps
         };
     });
+}
+
+/**
+ * Processes a converted variable for JSON/XML types
+ */
+function processConvertedVariable(
+    convertedVariable: IORoot,
+    model: DMModel,
+    visitedRefs: Set<string>
+): IOType {
+    const fieldId = convertedVariable.name;
+
+    if (model.traversingRoot) {
+        model.focusInputRootMap[fieldId] = model.traversingRoot;
+    }
+    
+    return {
+        id: fieldId,
+        name: fieldId,
+        displayName: convertedVariable.displayName,
+        typeName: convertedVariable.typeName,
+        kind: convertedVariable.kind,
+        category: convertedVariable.category,
+        isFocused: true,
+        ...(convertedVariable.optional && { optional: convertedVariable.optional }),
+        ...(convertedVariable.typeInfo && { typeInfo: convertedVariable.typeInfo }),
+        ...processTypeKind(convertedVariable, fieldId, model, visitedRefs)
+    };
 }
 
 /**
@@ -708,14 +811,32 @@ function processTypeFields(
     if (!type.fields) { return []; }
 
     return type.fields.map(field => {
-        const fieldId = generateFieldId(parentId, field.name!);
+        let fieldId = generateFieldId(parentId, field.name!);
+
+        let isFocused = false;
+        let isSeq = !!model.groupById;
+        if (isSeq && model.focusInputs) {
+            const focusMember = model.focusInputs[fieldId];
+            if (focusMember) {
+                field = focusMember;
+                fieldId = field.name;
+                isFocused = true;
+                model.focusInputRootMap[fieldId] = model.traversingRoot;
+                if (fieldId === model.groupById){
+                    isSeq = false;
+                }
+            }
+        }
+
         const ioType: IOType = {
             id: fieldId,
             name: field.name,
             displayName: field.displayName,
             typeName: field.typeName,
             kind: field.kind,
-            ...(field.optional !== undefined && { optional: field.optional }),
+            ...(isFocused && { isFocused }),
+            ...(isSeq && { isSeq }),
+            ...(field.optional && { optional: field.optional }),
             ...(field.typeInfo && { typeInfo: field.typeInfo })
         };
 
@@ -741,7 +862,6 @@ function processEnum(
         displayName: member.typeName,
         typeName: member.typeName,
         kind: member.kind,
-        ...(member.optional !== undefined && { optional: member.optional })
+        ...(member.optional && { optional: member.optional })
     }));
 }
-

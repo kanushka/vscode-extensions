@@ -35,8 +35,8 @@ const SlidingWindowContainer = styled.div`
     position: relative;
     width: 320px;
     max-height: 350px;
-    overflow-x: scroll;
-    overflow-y: scroll;
+    overflow-x: hidden;
+    overflow-y: hidden;
     padding: 0px;
     background-color: var(--vscode-dropdown-background);
     transition: height 0.3s ease-in-out;
@@ -219,9 +219,9 @@ type SlidingPaneNavContainerProps = {
     onMouseLeave?: () => void;
     sx?: React.CSSProperties;
     ref?: React.Ref<HTMLDivElement> | null;
-}
+} & React.HTMLAttributes<HTMLDivElement>;
 
-export const SlidingPaneNavContainer = ({ children, to, data, endIcon, onClick, sx, ref, onMouseEnter, onMouseLeave }: SlidingPaneNavContainerProps) => {
+export const SlidingPaneNavContainer = ({ children, to, data, endIcon, onClick, sx, ref, onMouseEnter, onMouseLeave, ...props }: SlidingPaneNavContainerProps) => {
     const { moveToNext } = useSlidingPane();
     const handleNavigation = () => {
         if (!to) return;
@@ -238,7 +238,7 @@ export const SlidingPaneNavContainer = ({ children, to, data, endIcon, onClick, 
             } else {
                 handleNavigation();
             }
-        }} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} ref={ref} style={sx}>
+        }} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} ref={ref} style={sx} {...props}>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%' }}>
                 <div>
                     {children}
@@ -294,3 +294,5 @@ export const CopilotFooter = styled.div`
     align-items: center;
     gap: 8px;
 `;
+
+export { useSlidingPane };

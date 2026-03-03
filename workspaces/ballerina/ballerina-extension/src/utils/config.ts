@@ -16,12 +16,12 @@
  * under the License.
  */
 
-import { SCOPE, PackageTomlValues, WorkspaceTomlValues } from '@wso2/ballerina-core';
+import { SemanticVersion, PackageTomlValues, SCOPE, WorkspaceTomlValues, ProjectInfo } from '@wso2/ballerina-core';
 import { BallerinaExtension } from '../core';
 import { WorkspaceConfiguration, workspace, Uri, RelativePattern } from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { parse } from 'toml';
+import { parse } from '@iarna/toml';
 
 export enum VERSION {
     BETA = 'beta',
@@ -73,6 +73,27 @@ export function isWSL(): boolean {
     );
 }
 
+/**
+ * Wraps a file path in double quotes if it contains spaces,
+ * so it can be safely used in shell command strings.
+ * Handles already-quoted paths and escapes embedded double quotes.
+ */
+export function quoteShellPath(filePath: string): string {
+    // Strip existing surrounding quotes to normalize
+    let normalized = filePath;
+    if (normalized.length >= 2 && normalized.startsWith('"') && normalized.endsWith('"')) {
+        normalized = normalized.slice(1, -1);
+    }
+
+    if (!normalized.includes(' ')) {
+        return normalized;
+    }
+
+    // Escape any embedded double quotes
+    const escaped = normalized.replace(/"/g, '\\"');
+    return `"${escaped}"`;
+}
+
 export function isSupportedVersion(ballerinaExtInstance: BallerinaExtension, supportedRelease: VERSION,
     supportedVersion: number): boolean {
     const ballerinaVersion: string = ballerinaExtInstance.ballerinaVersion.toLocaleLowerCase();
@@ -98,18 +119,92 @@ export function isSupportedVersion(ballerinaExtInstance: BallerinaExtension, sup
     return false;
 }
 
-export function isSupportedSLVersion(ballerinaExtInstance: BallerinaExtension, minSupportedVersion: number) {
+/**
+ * Creates a version object for comparison.
+ * 
+ * @param major Major version number
+ * @param minor Minor version number  
+ * @param patch Patch version number
+ * @returns A version object with major, minor, and patch components
+ * 
+ * @example
+ * // Version 2201.1.30
+ * createVersionNumber(2201, 1, 30)
+ * // Version 2201.12.10
+ * createVersionNumber(2201, 12, 10)
+ */
+export function createVersionNumber(
+    major: number,
+    minor: number,
+    patch: number
+): SemanticVersion {
+    return { major, minor, patch };
+}
+
+/**
+ * Compares two versions using semantic versioning rules.
+ * Returns true if current version >= minimum version.
+ * 
+ * @param current Current version components
+ * @param minimum Minimum required version components
+ * @returns true if current >= minimum
+ */
+function compareVersions(
+    current: SemanticVersion,
+    minimum: SemanticVersion
+): boolean {
+    // Compare major version first
+    if (current.major !== minimum.major) {
+        return current.major > minimum.major;
+    }
+
+    // Major versions are equal, compare minor
+    if (current.minor !== minimum.minor) {
+        return current.minor > minimum.minor;
+    }
+
+    // Major and minor are equal, compare patch
+    return current.patch >= minimum.patch;
+}
+
+/**
+ * Compares the current Ballerina version against a minimum required version.
+ * Only returns true for GA (non-preview/alpha/beta) versions that meet or exceed the minimum.
+ * 
+ * @param ballerinaExtInstance The Ballerina extension instance
+ * @param minSupportedVersion Minimum version (use createVersionNumber helper to generate)
+ * @returns true if current version is GA and meets minimum requirement
+ * 
+ * @example
+ * // Check if version is at least 2201.1.30
+ * isSupportedSLVersion(ext, createVersionNumber(2201, 1, 30))
+ */
+export function isSupportedSLVersion(
+    ballerinaExtInstance: BallerinaExtension,
+    minSupportedVersion: SemanticVersion
+) {
     const ballerinaVersion: string = ballerinaExtInstance.ballerinaVersion.toLocaleLowerCase();
     const isGA: boolean = !ballerinaVersion.includes(VERSION.ALPHA) && !ballerinaVersion.includes(VERSION.BETA) && !ballerinaVersion.includes(VERSION.PREVIEW);
 
+    if (!isGA) {
+        return false;
+    }
+
+    // Parse current version
     const regex = /(\d+)\.(\d+)\.(\d+)/;
     const match = ballerinaVersion.match(regex);
-    const currentVersionNumber = match ? Number(match.slice(1).join("")) : 0;
-
-    if (minSupportedVersion <= currentVersionNumber && isGA) {
-        return true;
+    if (!match) {
+        return false;
     }
-    return false;
+
+    const currentVersion = {
+        major: Number(match[1]),
+        minor: Number(match[2]),
+        patch: Number(match[3])
+    };
+
+    // Compare versions component by component
+    return compareVersions(currentVersion, minSupportedVersion);
 }
 
 export function checkIsBI(uri: Uri): boolean {
@@ -156,7 +251,7 @@ export async function checkIsBallerinaWorkspace(uri: Uri): Promise<boolean> {
 
     try {
         const tomlValues = await getWorkspaceTomlValues(uri.fsPath);
-        return tomlValues?.workspace !== undefined;
+        return tomlValues?.workspace !== undefined && tomlValues.workspace?.packages !== undefined;
     } catch (error) {
         // If there's an error reading the file, it's not a valid Ballerina workspace
         console.error(`Error reading workspace Ballerina.toml: ${error}`);
@@ -229,6 +324,32 @@ export function getOrgPackageName(projectPath: string): { orgName: string, packa
     }
 }
 
+export async function getProjectTomlValues(projectPath: string): Promise<Partial<PackageTomlValues> | undefined> {
+    const ballerinaTomlPath = path.join(projectPath, 'Ballerina.toml');
+    if (fs.existsSync(ballerinaTomlPath)) {
+        const tomlContent = await fs.promises.readFile(ballerinaTomlPath, 'utf-8');
+        try {
+            return parse(tomlContent) as Partial<PackageTomlValues>;
+        } catch (error) {
+            console.error("Failed to load Ballerina.toml content for project at path: ", projectPath, error);
+            return;
+        }
+    }
+}
+
+export async function getWorkspaceTomlValues(workspacePath: string): Promise<Partial<WorkspaceTomlValues> | undefined> {
+    const ballerinaTomlPath = path.join(workspacePath, 'Ballerina.toml');
+    if (fs.existsSync(ballerinaTomlPath)) {
+        const tomlContent = await fs.promises.readFile(ballerinaTomlPath, 'utf-8');
+        try {
+            return parse(tomlContent) as Partial<WorkspaceTomlValues>;
+        } catch (error) {
+            console.error("Failed to load Ballerina.toml content for workspace at path: ", workspacePath, error);
+            return;
+        }
+    }
+}
+
 export function fetchScope(uri: Uri): SCOPE {
     const config = workspace.getConfiguration('ballerina', uri);
     const inspected = config.inspect<SCOPE>('scope');
@@ -257,28 +378,40 @@ export function setupBIFiles(projectDir: string): void {
     });
 }
 
-export async function getProjectTomlValues(projectPath: string): Promise<PackageTomlValues> {
-    const ballerinaTomlPath = path.join(projectPath, 'Ballerina.toml');
-    if (fs.existsSync(ballerinaTomlPath)) {
-        const tomlContent = await fs.promises.readFile(ballerinaTomlPath, 'utf-8');
-        try {
-            return parse(tomlContent);
-        } catch (error) {
-            console.error("Failed to load Ballerina.toml content for project at path: ", projectPath, error);
-            return;
+export function getOrgAndPackageName(projectInfo: ProjectInfo, projectPath: string): { orgName: string, packageName: string } {
+    if (!projectPath || !projectInfo) {
+        return { orgName: '', packageName: '' };
+    }
+
+    if (projectInfo.children?.length) {
+        const matchedProject = projectInfo.children.find(
+            (child) => child.projectPath === projectPath
+        );
+
+        if (matchedProject) {
+            return {
+                orgName: matchedProject.org || matchedProject.orgName,
+                packageName: matchedProject.title || matchedProject.name
+            };
         }
     }
+
+    return {
+        orgName: projectInfo.org || projectInfo.orgName,
+        packageName: projectInfo.title || projectInfo.name
+    };
 }
 
-export async function getWorkspaceTomlValues(workspacePath: string): Promise<WorkspaceTomlValues> {
-    const ballerinaTomlPath = path.join(workspacePath, 'Ballerina.toml');
-    if (fs.existsSync(ballerinaTomlPath)) {
-        const tomlContent = await fs.promises.readFile(ballerinaTomlPath, 'utf-8');
-        try {
-            return parse(tomlContent);
-        } catch (error) {
-            console.error("Failed to load Ballerina.toml content for workspace at path: ", workspacePath, error);
-            return;
-        }
-    }
+export async function isLibraryProject(projectPath: string): Promise<boolean> {
+    const libBalPath = path.join(projectPath, 'lib.bal');
+    return fs.existsSync(libBalPath);
+
+    // TODO: Enable checking the validator import in the lib.bal file
+    // once this this implemented: https://github.com/wso2/product-ballerina-integrator/issues/2409
+
+    // if (fs.existsSync(libBalPath)) {
+    //     const libBalContent = fs.readFileSync(libBalPath, 'utf8');
+    //     return libBalContent.includes(`import ${VALIDATOR_PACKAGE_NAME} as _;`);
+    // }
+    // return false;
 }

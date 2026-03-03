@@ -158,6 +158,8 @@ export const getIntegrationScopeText = (integrationScope: string): string => {
 			return "File Integration";
 		case DevantScopes.AI_AGENT:
 			return "AI Agent";
+		case DevantScopes.LIBRARY:
+			return "Library";
 		default:
 			return integrationScope;
 	}
@@ -175,8 +177,40 @@ export const getTypeOfIntegrationType = (integrationScope: string): { type?: str
 			return { type: ChoreoComponentType.EventHandler, subType: ChoreoComponentSubType.fileIntegration };
 		case DevantScopes.AI_AGENT:
 			return { type: ChoreoComponentType.Service, subType: ChoreoComponentSubType.AiAgent };
+		case DevantScopes.LIBRARY:
+			return { type: ChoreoComponentType.Library };
 		default:
 			return {};
+	}
+};
+
+/**
+ * Convert ChoreoComponentType back to DevantScopes (inverse of getTypeOfIntegrationType).
+ * @param componentType - The ChoreoComponentType to convert
+ * @param subType - Optional subType for more specific mapping
+ * @returns The corresponding DevantScope
+ */
+export const getIntegrationTypeFromComponentType = (componentType: string, subType?: string): string | undefined => {
+	// Handle subTypes first for more specific matches
+	if (componentType === ChoreoComponentType.Service && subType === ChoreoComponentSubType.AiAgent) {
+		return DevantScopes.AI_AGENT;
+	}
+	if (componentType === ChoreoComponentType.EventHandler && subType === ChoreoComponentSubType.fileIntegration) {
+		return DevantScopes.FILE_INTEGRATION;
+	}
+
+	// Map ChoreoComponentType to DevantScopes
+	switch (componentType) {
+		case ChoreoComponentType.ScheduledTask:
+			return DevantScopes.AUTOMATION;
+		case ChoreoComponentType.Service:
+			return DevantScopes.INTEGRATION_AS_API; // Default for service without subType
+		case ChoreoComponentType.EventHandler:
+			return DevantScopes.EVENT_INTEGRATION; // Default for event handler without subType
+		case ChoreoComponentType.Library:
+			return DevantScopes.LIBRARY;
+		default:
+			return undefined;
 	}
 };
 
@@ -283,6 +317,23 @@ export const parseGitURL = (url?: string): null | [string, string, string] => {
 	}
 
 	return [org, repoName, provider];
+};
+
+export const buildGitURL = (org: string, repoName: string, provider: string, withDotGitSuffix?: boolean, serverUrl?: string): string | null => {
+	switch (provider) {
+		case GitProvider.GITHUB:
+			return `https://github.com/${org}/${repoName}${withDotGitSuffix ? ".git" : ""}`;
+		case GitProvider.BITBUCKET:
+			return serverUrl
+				? `${serverUrl}/${org}/${repoName}${withDotGitSuffix ? ".git" : ""}`
+				: `https://bitbucket.org/${org}/${repoName}${withDotGitSuffix ? ".git" : ""}`;
+		case GitProvider.GITLAB_SERVER:
+			return serverUrl
+				? `${serverUrl}/${org}/${repoName}${withDotGitSuffix ? ".git" : ""}`
+				: `https://gitlab.com/${org}/${repoName}${withDotGitSuffix ? ".git" : ""}`;
+		default:
+			return null;
+	}
 };
 
 export const getComponentKindRepoSource = (source: ComponentKindSource) => {

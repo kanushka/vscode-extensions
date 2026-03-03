@@ -23,7 +23,8 @@ import { Uri } from 'vscode';
 import { ArtifactData, EVENT_TYPE, MACHINE_VIEW, ProjectStructureArtifactResponse, STModification, TextEdit } from '@wso2/ballerina-core';
 import { openView, StateMachine, undoRedoManager } from '../stateMachine';
 import { ArtifactsUpdated, ArtifactNotificationHandler } from './project-artifacts-handler';
-import { existsSync, writeFileSync } from 'fs';
+import { existsSync, writeFileSync, mkdirSync } from 'fs';
+import * as path from 'path';
 import { notifyCurrentWebview } from '../RPCLayer';
 import { applyBallerinaTomlEdit } from '../rpc-managers/bi-diagram/utils';
 
@@ -37,9 +38,10 @@ export interface UpdateSourceCodeRequest {
     identifier?: string;
     skipPayloadCheck?: boolean; // This is used to skip the payload check because the payload data might become empty as a result of a change. Example: Deleting a component.
     isRenameOperation?: boolean; // This is used to identify if the update is a rename operation.
+    skipUpdateViewOnTomlUpdate?: boolean; // This is used to skip updating the view on toml updates in certain scenarios.
 }
 
-export async function updateSourceCode(updateSourceCodeRequest: UpdateSourceCodeRequest): Promise<ProjectStructureArtifactResponse[]> {
+export async function updateSourceCode(updateSourceCodeRequest: UpdateSourceCodeRequest, isChangeFromHelperPane?: boolean, skipFormatting?: boolean): Promise<ProjectStructureArtifactResponse[]> {
     try {
         let tomlFilesUpdated = false;
         StateMachine.setEditMode();
@@ -49,6 +51,11 @@ export async function updateSourceCode(updateSourceCodeRequest: UpdateSourceCode
             const fileUri = key.startsWith("file:") ? Uri.parse(key) : Uri.file(key);
             const fileUriString = fileUri.toString();
             if (!existsSync(fileUri.fsPath)) {
+                // Ensure parent directory exists before creating the file
+                const dirPath = path.dirname(fileUri.fsPath);
+                if (!existsSync(dirPath)) {
+                    mkdirSync(dirPath, { recursive: true });
+                }
                 writeFileSync(fileUri.fsPath, '');
                 await new Promise(resolve => setTimeout(resolve, 500)); // Add small delay to ensure file is created
                 await StateMachine.langClient().didOpen({
@@ -100,6 +107,10 @@ export async function updateSourceCode(updateSourceCodeRequest: UpdateSourceCode
                     modificationRequests[fileUriString] = { filePath: fileUri.fsPath, modifications: modificationList };
                 }
             }
+            if (edits.length === 0) {
+                StateMachine.setReadyMode();
+                return [];
+            }
         }
 
         // Iterate through modificationRequests and apply modifications
@@ -147,10 +158,13 @@ export async function updateSourceCode(updateSourceCodeRequest: UpdateSourceCode
                     undoRedoManager?.addFileToBatch(fileUri.fsPath, formattedSource.newText, formattedSource.newText);
                 }
             }
+
             undoRedoManager?.commitBatchOperation(updateSourceCodeRequest.description ? updateSourceCodeRequest.description : (updateSourceCodeRequest.artifactData ? `Change in ${updateSourceCodeRequest.artifactData?.artifactType} ${updateSourceCodeRequest.artifactData?.identifier}` : "Update Source Code"));
 
-            // Apply all formatted changes at once
-            await workspace.applyEdit(formattedWorkspaceEdit);
+            if (!skipFormatting) { //TODO: Remove the skipFormatting flag once LS APIs are updated to give already formatted text edits
+                // Apply all formatted changes at once
+                await workspace.applyEdit(formattedWorkspaceEdit);
+            }
 
             // Handle missing dependencies after all changes are applied
             if (updateSourceCodeRequest.resolveMissingDependencies) {
@@ -162,7 +176,7 @@ export async function updateSourceCode(updateSourceCodeRequest: UpdateSourceCode
             }
 
             return new Promise((resolve, reject) => {
-                if (tomlFilesUpdated) {
+                if (tomlFilesUpdated && !updateSourceCodeRequest?.skipUpdateViewOnTomlUpdate) {
                     StateMachine.setReadyMode();
                     resolve([]);
                     return;
@@ -176,7 +190,7 @@ export async function updateSourceCode(updateSourceCodeRequest: UpdateSourceCode
                         clearTimeout(timeoutId);
                         resolve(payload.data);
                         StateMachine.setReadyMode();
-                        checkAndNotifyWebview(payload.data, updateSourceCodeRequest);
+                        checkAndNotifyWebview(payload.data, updateSourceCodeRequest, isChangeFromHelperPane);
                         unsubscribe();
                     }
                 });
@@ -186,7 +200,7 @@ export async function updateSourceCode(updateSourceCodeRequest: UpdateSourceCode
                     console.log("No artifact update notification received within 10 seconds");
                     unsubscribe();
                     StateMachine.setReadyMode();
-                    openView(EVENT_TYPE.OPEN_VIEW, { view: MACHINE_VIEW.Overview });
+                    openView(EVENT_TYPE.OPEN_VIEW, { view: MACHINE_VIEW.PackageOverview });
                     reject(new Error("Operation timed out. Please try again."));
                 }, 10000);
 
@@ -214,7 +228,11 @@ export async function updateSourceCode(updateSourceCodeRequest: UpdateSourceCode
 //** 
 // Notify webview unless a new TYPE artifact is created outside the type diagram view
 // */
-function checkAndNotifyWebview(response: ProjectStructureArtifactResponse[], request: UpdateSourceCodeRequest) {
+function checkAndNotifyWebview(
+    response: ProjectStructureArtifactResponse[],
+    request: UpdateSourceCodeRequest,
+    isChangeFromHelperPane?: boolean
+) {
     const newArtifact = response.find(artifact => artifact.isNew);
     const selectedArtifact = response.find(artifact => artifact.id === request.identifier);
     const stateContext = StateMachine.context().view;
@@ -226,7 +244,7 @@ function checkAndNotifyWebview(response: ProjectStructureArtifactResponse[], req
 
     if ((selectedArtifact?.type === "TYPE " || newArtifact?.type === "TYPE") && stateContext !== MACHINE_VIEW.TypeDiagram) {
         return;
-    } else {
+    } else if (!isChangeFromHelperPane) {
         notifyCurrentWebview();
     }
 }
