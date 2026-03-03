@@ -1,0 +1,242 @@
+name: Trivy Auto Remediation
+
+on:
+  workflow_dispatch:
+    inputs:
+      scan_branch:
+        description: 'Branch to scan and patch'
+        required: true
+        default: 'main'
+        type: string
+      base_branch:
+        description: 'Base branch for the PR'
+        required: true
+        default: 'main'
+        type: string
+  schedule:
+    - cron: '15 2 * * 1'
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: trivy-auto-remediation
+  cancel-in-progress: false
+
+jobs:
+  remediate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      BALLERINA_VERSION: 2201.7.2
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.scan_branch || github.ref_name }}
+
+      - name: Setup Rush
+        uses: gigara/setup-rush@v1.2.0
+        with:
+          pnpm: 10.10.0
+          node: 22.x
+          rush-install: true
+          cache-rush: true
+          cache-pnpm: true
+          set-env: true
+
+      - name: Install Ballerina
+        uses: ballerina-platform/setup-ballerina@v1
+        with:
+          version: ${{ env.BALLERINA_VERSION }}
+
+      - name: Copy .env.example to .env
+        run: |
+          find . -type f -name ".env.example" | while read -r example; do
+            envfile="$(dirname "$example")/.env"
+            cp "$example" "$envfile"
+          done
+
+      - name: Generate Trivy JSON report
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: json
+          output: trivy-results.json
+          timeout: 10m
+          skip-dirs: common/temp,workspaces/ballerina/ballerina-extension/grammar/ballerina-grammar
+          ignore-unfixed: true
+          exit-code: 0
+
+      - name: Generate Trivy JSON report (ballerina-grammar)
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: fs
+          scan-ref: workspaces/ballerina/ballerina-extension/grammar/ballerina-grammar
+          format: json
+          output: grammar-trivy-results.json
+          timeout: 10m
+          ignore-unfixed: true
+          exit-code: 0
+
+      - name: Apply Trivy remediations
+        id: remediate
+        run: |
+          node common/scripts/apply-trivy-remediations.js --report trivy-results.json --summary trivy-remediation-summary.json
+
+          if git diff --quiet; then
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Apply Trivy remediations (ballerina-grammar)
+        id: remediate-grammar
+        shell: bash
+        run: |
+          pushd workspaces/ballerina/ballerina-extension/grammar/ballerina-grammar
+          node ../../../../../common/scripts/apply-trivy-remediations.js --report ../../../../../grammar-trivy-results.json --summary ../../../../../grammar-trivy-remediation-summary.json --overrides-mode package-json --overrides package.json
+          popd
+
+          if git -C workspaces/ballerina/ballerina-extension/grammar/ballerina-grammar diff --quiet; then
+            echo "changes=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changes=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload remediation summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-remediation-summary
+          path: trivy-remediation-summary.json
+          if-no-files-found: ignore
+
+      - name: Upload remediation summary (ballerina-grammar)
+        uses: actions/upload-artifact@v4
+        with:
+          name: grammar-trivy-remediation-summary
+          path: grammar-trivy-remediation-summary.json
+          if-no-files-found: ignore
+
+      - name: Generate PR body
+        if: steps.remediate.outputs.changes == 'true'
+        run: node common/scripts/generate-trivy-pr-body.js trivy-remediation-summary.json "${{ runner.temp }}/trivy-pr-body.md"
+
+      - name: Generate PR body (ballerina-grammar)
+        if: steps.remediate-grammar.outputs.changes == 'true'
+        run: |
+          pushd workspaces/ballerina/ballerina-extension/grammar/ballerina-grammar
+          node ../../../../../common/scripts/generate-trivy-pr-body.js ../../../../../grammar-trivy-remediation-summary.json "${{ runner.temp }}/grammar-trivy-pr-body.md"
+          popd
+
+      - name: Rush update
+        if: steps.remediate.outputs.changes == 'true'
+        run: node common/scripts/install-run-rush.js update --full
+
+      - name: Install dependencies (ballerina-grammar)
+        if: steps.remediate-grammar.outputs.changes == 'true'
+        working-directory: workspaces/ballerina/ballerina-extension/grammar/ballerina-grammar
+        run: npm install
+
+      - name: Rush build
+        if: steps.remediate.outputs.changes == 'true'
+        run: node common/scripts/install-run-rush.js build --verbose
+
+      - name: Run diagram test suite
+        if: steps.remediate.outputs.changes == 'true'
+        run: |
+          xvfb-run --auto-servernum pnpm --dir workspaces/ballerina/bi-diagram run test
+          xvfb-run --auto-servernum pnpm --dir workspaces/ballerina/component-diagram run test
+          xvfb-run --auto-servernum pnpm --dir workspaces/ballerina/type-diagram run test
+          xvfb-run --auto-servernum pnpm --dir workspaces/ballerina/sequence-diagram run test
+          xvfb-run --auto-servernum pnpm --dir workspaces/mi/mi-diagram run test
+
+      - name: Run tests (ballerina-grammar)
+        if: steps.remediate-grammar.outputs.changes == 'true'
+        working-directory: workspaces/ballerina/ballerina-extension/grammar/ballerina-grammar
+        run: npm test
+
+      - name: Verify Trivy scan is clean
+        if: steps.remediate.outputs.changes == 'true'
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: fs
+          scan-ref: .
+          format: table
+          timeout: 10m
+          skip-dirs: common/temp,workspaces/ballerina/ballerina-extension/grammar/ballerina-grammar
+          ignore-unfixed: true
+          exit-code: 1
+
+      - name: Verify Trivy scan is clean (ballerina-grammar)
+        if: steps.remediate-grammar.outputs.changes == 'true'
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          scan-type: fs
+          scan-ref: workspaces/ballerina/ballerina-extension/grammar/ballerina-grammar
+          format: table
+          timeout: 10m
+          ignore-unfixed: true
+          exit-code: 1
+
+      - name: Clean generated scan files
+        if: always()
+        run: rm -f trivy-results.json trivy-remediation-summary.json grammar-trivy-results.json grammar-trivy-remediation-summary.json
+
+      - name: Detect grammar token availability
+        id: grammar-token
+        if: steps.remediate-grammar.outputs.changes == 'true'
+        shell: bash
+        env:
+          GRAMMAR_TOKEN: ${{ secrets.BALLERINA_GRAMMAR_TOKEN }}
+        run: |
+          if [[ -n "$GRAMMAR_TOKEN" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create pull request
+        if: steps.remediate.outputs.changes == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: codex/trivy-auto-remediation-${{ github.run_id }}
+          base: ${{ github.event_name == 'workflow_dispatch' && inputs.base_branch || github.ref_name }}
+          delete-branch: true
+          title: 'chore: auto-remediate Trivy vulnerabilities'
+          commit-message: 'chore: auto-remediate trivy vulnerabilities'
+          body-path: ${{ runner.temp }}/trivy-pr-body.md
+          labels: |
+            dependencies
+            security
+
+      - name: Create pull request (ballerina-grammar)
+        id: grammar-pr
+        if: steps.remediate-grammar.outputs.changes == 'true' && steps.grammar-token.outputs.available == 'true'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.BALLERINA_GRAMMAR_TOKEN }}
+          path: workspaces/ballerina/ballerina-extension/grammar/ballerina-grammar
+          branch: codex/trivy-auto-remediation-grammar-${{ github.run_id }}
+          base: main
+          delete-branch: true
+          title: 'chore: auto-remediate Trivy vulnerabilities'
+          commit-message: 'chore: auto-remediate trivy vulnerabilities'
+          body-path: ${{ runner.temp }}/grammar-trivy-pr-body.md
+          labels: |
+            dependencies
+            security
+
+      - name: No grammar token provided
+        if: steps.remediate-grammar.outputs.changes == 'true' && steps.grammar-token.outputs.available != 'true'
+        run: |
+          echo "ballerina-grammar fixes were generated, but BALLERINA_GRAMMAR_TOKEN is not configured."
+          echo "Set BALLERINA_GRAMMAR_TOKEN in repository secrets to automatically open the grammar PR."
+
+      - name: No remediation required
+        if: steps.remediate.outputs.changes != 'true' && steps.remediate-grammar.outputs.changes != 'true'
+        run: echo "No remediations were generated from the Trivy report."

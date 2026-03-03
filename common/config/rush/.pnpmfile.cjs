@@ -1,5 +1,8 @@
 'use strict';
 
+const fs = require('node:fs');
+const path = require('node:path');
+
 /**
  * When using the PNPM package manager, you can use pnpmfile.js to workaround
  * dependencies that have mistakes in their package.json file.  (This feature is
@@ -12,9 +15,34 @@
  * ANY CACHED DEPENDENCY ANALYSIS.  After any modification to pnpmfile.js, it's recommended to run
  * "rush update --full" so that PNPM will recalculate all version selections.
  */
+const trivyOverridesPath = path.join(__dirname, 'trivy-overrides.json');
+
+function loadTrivyOverrides(context) {
+  try {
+    if (!fs.existsSync(trivyOverridesPath)) {
+      return {};
+    }
+
+    const raw = fs.readFileSync(trivyOverridesPath, 'utf8');
+    const parsed = JSON.parse(raw);
+
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      context.log(`Ignored invalid Trivy overrides in ${trivyOverridesPath}.`);
+      return {};
+    }
+
+    return parsed;
+  } catch (error) {
+    context.log(`Failed to load Trivy overrides from ${trivyOverridesPath}: ${error.message}`);
+    return {};
+  }
+}
+
 module.exports = {
   hooks: {
     readPackage(pkg, context) {
+      const trivyOverrides = loadTrivyOverrides(context);
+
       function applyOverrides(deps) {
         if (!deps) return;
         if (deps['http-proxy']) deps['http-proxy'] = '1.18.1';
@@ -56,6 +84,12 @@ module.exports = {
             newVersion = currentVersion;
           }
           deps['minimatch'] = newVersion;
+        }
+
+        for (const [packageName, overrideVersion] of Object.entries(trivyOverrides)) {
+          if (deps[packageName]) {
+            deps[packageName] = overrideVersion;
+          }
         }
       }
 
