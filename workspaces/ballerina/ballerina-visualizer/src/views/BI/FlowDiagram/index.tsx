@@ -160,6 +160,7 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     const nodeTemplateRef = useRef<FlowNode>();
     const topNodeRef = useRef<FlowNode | Branch>();
     const targetRef = useRef<LineRange>();
+    const sidePanelViewRef = useRef<SidePanelView>(SidePanelView.NODE_LIST);
     const suggestedText = useRef<string>();
     const selectedClientName = useRef<string>();
     const initialCategoriesRef = useRef<any[]>([]);
@@ -199,6 +200,10 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     useEffect(() => {
         debouncedGetFlowModelForBreakpoints();
     }, [breakpointState]);
+
+    useEffect(() => {
+        sidePanelViewRef.current = sidePanelView;
+    }, [sidePanelView]);
 
     useEffect(() => {
         rpcClient.onProjectContentUpdated(() => {
@@ -305,23 +310,34 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
         setNavigationStack((prev) => [...prev, newItem]);
     };
 
-    const popFromNavigationStack = () => {
-        setNavigationStack((prev) => {
-            if (prev.length === 0) return prev;
-            const newStack = [...prev];
-            const poppedItem = newStack.pop();
-            return newStack;
-        });
+    const restoreNavigationItem = (item: NavigationStackItem) => {
+        const hasCategories = Array.isArray(item.categories) && item.categories.length > 0;
+        const restoredCategories =
+            item.view === SidePanelView.NODE_LIST && !hasCategories
+                ? (initialCategoriesRef.current as PanelCategory[])
+                : item.categories;
 
-        if (navigationStack.length > 0) {
-            const lastItem = navigationStack[navigationStack.length - 1];
-            setSidePanelView(lastItem.view);
-            setCategories(lastItem.categories);
-            selectedNodeRef.current = lastItem.selectedNode;
-            selectedClientName.current = lastItem.clientName;
-            return true;
+        setSidePanelView(item.view);
+        setCategories(restoredCategories || []);
+        selectedNodeRef.current = item.selectedNode;
+        selectedClientName.current = item.clientName;
+    };
+
+    const popFromNavigationStack = () => {
+        if (navigationStack.length === 0) {
+            return false;
         }
-        return false;
+
+        const newStack = [...navigationStack];
+        const lastItem = newStack.pop();
+        if (!lastItem) {
+            setNavigationStack(newStack);
+            return false;
+        }
+
+        setNavigationStack(newStack);
+        restoreNavigationItem(lastItem);
+        return true;
     };
 
     const clearNavigationStack = () => {
@@ -329,26 +345,26 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     };
 
     const popNavigationStackUntilView = (targetView: SidePanelView) => {
-        setNavigationStack((prev) => {
-            const newStack = [...prev];
-            while (newStack.length > 0) {
-                const lastItem = newStack[newStack.length - 1];
-                if (lastItem.view === targetView) {
-                    // Found the target view, restore it
-                    setSidePanelView(lastItem.view);
-                    setCategories(lastItem.categories);
-                    selectedNodeRef.current = lastItem.selectedNode;
-                    selectedClientName.current = lastItem.clientName;
-                    newStack.pop();
-                    return newStack;
-                }
-                newStack.pop();
-            }
-            return [];
-        });
+        if (navigationStack.length === 0) {
+            return false;
+        }
 
-        const targetItem = navigationStack.find((item) => item.view === targetView);
-        return !!targetItem;
+        const newStack = [...navigationStack];
+        while (newStack.length > 0) {
+            const lastItem = newStack.pop();
+            if (!lastItem) {
+                continue;
+            }
+
+            if (lastItem.view === targetView) {
+                setNavigationStack(newStack);
+                restoreNavigationItem(lastItem);
+                return true;
+            }
+        }
+
+        setNavigationStack([]);
+        return false;
     };
 
     const handleModelProviderAdded = async () => {
@@ -920,6 +936,32 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
     };
 
     const handleSearch = async (searchText: string, functionType: FUNCTION_TYPE, searchKind: SearchKind) => {
+        const getPanelViewFromSearch = (): SidePanelView => {
+            switch (searchKind) {
+                case "FUNCTION":
+                    return functionType === FUNCTION_TYPE.REGULAR
+                        ? SidePanelView.FUNCTION_LIST
+                        : SidePanelView.DATA_MAPPER_LIST;
+                case "NP_FUNCTION":
+                    return SidePanelView.NP_FUNCTION_LIST;
+                case "MODEL_PROVIDER":
+                    return SidePanelView.MODEL_PROVIDER_LIST;
+                case "VECTOR_STORE":
+                    return SidePanelView.VECTOR_STORE_LIST;
+                case "EMBEDDING_PROVIDER":
+                    return SidePanelView.EMBEDDING_PROVIDER_LIST;
+                case "KNOWLEDGE_BASE":
+                    return SidePanelView.KNOWLEDGE_BASE_LIST;
+                case "DATA_LOADER":
+                    return SidePanelView.DATA_LOADER_LIST;
+                case "CHUNKER":
+                    return SidePanelView.CHUNKER_LIST;
+                default:
+                    return SidePanelView.NODE_LIST;
+            }
+        };
+
+        const panelView = getPanelViewFromSearch();
         const request: BISearchRequest = {
             position: {
                 startLine: targetRef.current.startLine,
@@ -942,44 +984,13 @@ export function BIFlowDiagram(props: BIFlowDiagramProps) {
             .getBIDiagramRpcClient()
             .search(request)
             .then((response) => {
+                if (sidePanelViewRef.current !== panelView) {
+                    return;
+                }
                 console.log(`>>> Searched List of ${searchKind.toLowerCase()}`, response);
                 setCategories(
                     convertFunctionCategoriesToSidePanelCategories(response.categories as Category[], functionType)
                 );
-
-                // Set the appropriate side panel view based on search kind and function type
-                let panelView: SidePanelView;
-                switch (searchKind) {
-                    case "FUNCTION":
-                        panelView =
-                            functionType === FUNCTION_TYPE.REGULAR
-                                ? SidePanelView.FUNCTION_LIST
-                                : SidePanelView.DATA_MAPPER_LIST;
-                        break;
-                    case "NP_FUNCTION":
-                        panelView = SidePanelView.NP_FUNCTION_LIST;
-                        break;
-                    case "MODEL_PROVIDER":
-                        panelView = SidePanelView.MODEL_PROVIDER_LIST;
-                        break;
-                    case "VECTOR_STORE":
-                        panelView = SidePanelView.VECTOR_STORE_LIST;
-                        break;
-                    case "EMBEDDING_PROVIDER":
-                        panelView = SidePanelView.EMBEDDING_PROVIDER_LIST;
-                        break;
-                    case "KNOWLEDGE_BASE":
-                        panelView = SidePanelView.KNOWLEDGE_BASE_LIST;
-                        break;
-                    case "DATA_LOADER":
-                        panelView = SidePanelView.DATA_LOADER_LIST;
-                        break;
-                    case "CHUNKER":
-                        panelView = SidePanelView.CHUNKER_LIST;
-                        break;
-                    default:
-                        panelView = SidePanelView.NODE_LIST;
-                }
 
                 setSidePanelView(panelView);
                 setShowSidePanel(true);
