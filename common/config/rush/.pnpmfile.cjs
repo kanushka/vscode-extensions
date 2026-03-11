@@ -45,6 +45,9 @@ module.exports = {
         if (pkg.dependencies['micromatch']) {
           pkg.dependencies['micromatch'] = '^4.0.8';
         }
+        if (pkg.dependencies['minimatch']) {
+          pkg.dependencies['minimatch'] = '^10.2.3';
+        }
         if (pkg.dependencies['esbuild']) {
           pkg.dependencies['esbuild'] = '^0.25.0';
         }
@@ -73,7 +76,46 @@ module.exports = {
           pkg.dependencies['eslint'] = '^9.27.0';
         }
         if (pkg.dependencies['fast-xml-parser']) {
-          pkg.dependencies['fast-xml-parser'] = '5.3.4';
+          pkg.dependencies['fast-xml-parser'] = '^5.3.8';
+        }
+        if (pkg.dependencies['axios']) {
+          pkg.dependencies['axios'] = '^1.13.5';
+        }
+        if (pkg.dependencies['dompurify']) {
+          pkg.dependencies['dompurify'] = '^3.2.7';
+        }
+        if (pkg.dependencies['express-rate-limit']) {
+          pkg.dependencies['express-rate-limit'] = '^8.2.2';
+        }
+        if (pkg.dependencies['hono']) {
+          pkg.dependencies['hono'] = '^4.12.4';
+        }
+        if (pkg.dependencies['immutable']) {
+          pkg.dependencies['immutable'] = '^3.8.3';
+        }
+        if (pkg.dependencies['markdown-it']) {
+          pkg.dependencies['markdown-it'] = '^14.1.1';
+        }
+        if (pkg.dependencies['qs']) {
+          pkg.dependencies['qs'] = '^6.14.2';
+        }
+        if (pkg.dependencies['serialize-javascript']) {
+          pkg.dependencies['serialize-javascript'] = '^7.0.3';
+        }
+        if (pkg.dependencies['underscore']) {
+          pkg.dependencies['underscore'] = '^1.13.8';
+        }
+        if (pkg.dependencies['@hono/node-server']) {
+          pkg.dependencies['@hono/node-server'] = '^1.19.10';
+        }
+        if (pkg.dependencies['@tootallnate/once']) {
+          pkg.dependencies['@tootallnate/once'] = '^3.0.1';
+        }
+        if (pkg.dependencies['ajv']) {
+          pkg.dependencies['ajv'] = '^8.18.0';
+        }
+        if (pkg.dependencies['file-type']) {
+          pkg.dependencies['file-type'] = '^21.3.1';
         }
       }
 
@@ -103,6 +145,9 @@ module.exports = {
         if (pkg.devDependencies['micromatch']) {
           pkg.devDependencies['micromatch'] = '^4.0.8';
         }
+        if (pkg.devDependencies['minimatch']) {
+          pkg.devDependencies['minimatch'] = '^10.2.3';
+        }
         if (pkg.devDependencies['esbuild']) {
           pkg.devDependencies['esbuild'] = '^0.25.0';
         }
@@ -128,7 +173,46 @@ module.exports = {
           pkg.devDependencies['eslint'] = '^9.27.0';
         }
         if (pkg.devDependencies['fast-xml-parser']) {
-          pkg.devDependencies['fast-xml-parser'] = '5.3.4';
+          pkg.devDependencies['fast-xml-parser'] = '^5.3.8';
+        }
+        if (pkg.devDependencies['axios']) {
+          pkg.devDependencies['axios'] = '^1.13.5';
+        }
+        if (pkg.devDependencies['dompurify']) {
+          pkg.devDependencies['dompurify'] = '^3.2.7';
+        }
+        if (pkg.devDependencies['express-rate-limit']) {
+          pkg.devDependencies['express-rate-limit'] = '^8.2.2';
+        }
+        if (pkg.devDependencies['hono']) {
+          pkg.devDependencies['hono'] = '^4.12.4';
+        }
+        if (pkg.devDependencies['immutable']) {
+          pkg.devDependencies['immutable'] = '^3.8.3';
+        }
+        if (pkg.devDependencies['markdown-it']) {
+          pkg.devDependencies['markdown-it'] = '^14.1.1';
+        }
+        if (pkg.devDependencies['qs']) {
+          pkg.devDependencies['qs'] = '^6.14.2';
+        }
+        if (pkg.devDependencies['serialize-javascript']) {
+          pkg.devDependencies['serialize-javascript'] = '^7.0.3';
+        }
+        if (pkg.devDependencies['underscore']) {
+          pkg.devDependencies['underscore'] = '^1.13.8';
+        }
+        if (pkg.devDependencies['@hono/node-server']) {
+          pkg.devDependencies['@hono/node-server'] = '^1.19.10';
+        }
+        if (pkg.devDependencies['@tootallnate/once']) {
+          pkg.devDependencies['@tootallnate/once'] = '^3.0.1';
+        }
+        if (pkg.devDependencies['ajv']) {
+          pkg.devDependencies['ajv'] = '^8.18.0';
+        }
+        if (pkg.devDependencies['file-type']) {
+          pkg.devDependencies['file-type'] = '^21.3.1';
         }
       }
 
