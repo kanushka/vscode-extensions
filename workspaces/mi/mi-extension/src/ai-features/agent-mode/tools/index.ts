@@ -44,7 +44,18 @@ export {
     // Utility functions
     getAvailableConnectors,
     getAvailableInboundEndpoints,
+    buildLSHighLevelSummary,
 } from './connector_tools';
+
+// Export connector LS client
+export {
+    resolveConnectorViaLS,
+    getConnectorFromLS,
+    getAllConnectorsFromLS,
+    readOutputSchema,
+    type LSConnectorResult,
+    type LSConnectorAction,
+} from './connector_ls_client';
 
 // Export deep-context tools
 export {

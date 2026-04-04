@@ -24,14 +24,9 @@ import { MILanguageClient } from '../../../lang-client/activator';
 import { DependencyDetails } from '@wso2/mi-core';
 import { logDebug, logError } from '../../copilot/logger';
 import { AgentUndoCheckpointManager } from '../undo/checkpoint-manager';
+import { lookupConnectorFromCache } from './connector_store_cache';
 import { CONNECTOR_DB } from '../context/connectors/connector_db';
 import { INBOUND_DB } from '../context/connectors/inbound_db';
-import {
-    getConnectorDefinitions,
-    getInboundDefinitions,
-    ConnectorDefinitionLookupResult,
-    getRuntimeVersionFromPom,
-} from './connector_store_cache';
 
 // ============================================================================
 // Execute Function Types
@@ -48,8 +43,6 @@ interface ProcessItemResult {
     type: 'connector' | 'inbound';
     success: boolean;
     alreadyAdded?: boolean;
-    usedFallback?: boolean;
-    storeFailure?: boolean;
     error?: string;
 }
 
@@ -104,10 +97,6 @@ export function createManageConnectorExecute(
             const miVisualizerRpcManager = new MiVisualizerRpcManager(projectPath);
             await undoCheckpointManager?.captureBeforeChange('pom.xml');
 
-            // Get MI runtime version from pom.xml
-            const runtimeVersion = await getRuntimeVersionFromPom(projectPath);
-            logDebug(`[${toolName}] Runtime version: ${runtimeVersion}`);
-
             // For add operation, get existing dependencies to check for duplicates
             let existingDependencies: ExistingDependencies = { connectorDependencies: [], otherDependencies: [] };
             if (isAdd) {
@@ -117,65 +106,31 @@ export function createManageConnectorExecute(
                 logDebug(`[${toolName}] Existing connector dependencies: ${existingDependencies.connectorDependencies?.length || 0}`);
             }
 
-            const emptyLookup: ConnectorDefinitionLookupResult = {
-                definitionsByName: {},
-                missingNames: [],
-                fallbackUsedNames: [],
-                storeFailureNames: [],
-                warnings: [],
-                runtimeVersionUsed: runtimeVersion || 'unknown',
-            };
-
             const results: ProcessItemResult[] = [];
-            const [connectorLookup, inboundLookup] = await Promise.all([
-                connector_names.length > 0
-                    ? getConnectorDefinitions(projectPath, connector_names, CONNECTOR_DB)
-                    : Promise.resolve(emptyLookup),
-                inbound_endpoint_names.length > 0
-                    ? getInboundDefinitions(projectPath, inbound_endpoint_names, INBOUND_DB)
-                    : Promise.resolve(emptyLookup),
-            ]);
+            const allNames = [
+                ...connector_names.map(n => ({ name: n, type: 'connector' as const })),
+                ...inbound_endpoint_names.map(n => ({ name: n, type: 'inbound' as const })),
+            ];
 
-            if (connectorLookup.warnings.length > 0 || inboundLookup.warnings.length > 0) {
-                logDebug(`[${toolName}] Connector lookup warnings: ${[...connectorLookup.warnings, ...inboundLookup.warnings].join(' | ')}`);
-            }
-
-            // Process connectors if any
-            if (connector_names.length > 0) {
-                for (const connectorName of connector_names) {
-                    const result = await processItem(
-                        connectorName,
-                        'connector',
-                        connectorLookup.definitionsByName[connectorName] ?? null,
-                        connectorLookup.fallbackUsedNames.includes(connectorName),
-                        connectorLookup.storeFailureNames.includes(connectorName),
-                        existingDependencies,
-                        miVisualizerRpcManager,
-                        isAdd,
-                        operation,
-                        toolName
-                    );
-                    results.push(result);
-                }
-            }
-
-            // Process inbound endpoints if any
-            if (inbound_endpoint_names.length > 0) {
-                for (const inboundName of inbound_endpoint_names) {
-                    const result = await processItem(
-                        inboundName,
-                        'inbound',
-                        inboundLookup.definitionsByName[inboundName] ?? null,
-                        inboundLookup.fallbackUsedNames.includes(inboundName),
-                        inboundLookup.storeFailureNames.includes(inboundName),
-                        existingDependencies,
-                        miVisualizerRpcManager,
-                        isAdd,
-                        operation,
-                        toolName
-                    );
-                    results.push(result);
-                }
+            for (const { name: itemName, type: itemType } of allNames) {
+                const { item: storeItem } = await lookupConnectorFromCache(
+                    projectPath,
+                    itemName,
+                    CONNECTOR_DB,
+                    INBOUND_DB
+                );
+                const dbEntry = storeItem ?? null;
+                const result = await processItem(
+                    itemName,
+                    itemType,
+                    dbEntry,
+                    existingDependencies,
+                    miVisualizerRpcManager,
+                    isAdd,
+                    operation,
+                    toolName
+                );
+                results.push(result);
             }
 
             logDebug(`[${toolName}] Results: ${JSON.stringify(results)}`);
@@ -199,18 +154,8 @@ export function createManageConnectorExecute(
             // Build response message
             const successful = results.filter(r => r.success);
             const failed = results.filter(r => !r.success);
-            const fallbackUsed = results.filter(r => r.success && r.usedFallback);
-            const storeFailed = results.filter((r) => !r.success && r.storeFailure);
 
             let message = '';
-
-            if (fallbackUsed.length > 0) {
-                message += `Used local fallback definitions for ${fallbackUsed.length} item(s):\n`;
-                fallbackUsed.forEach(r => {
-                    message += `  - ${r.name} (${r.type})\n`;
-                });
-                message += '\n';
-            }
 
             if (isAdd) {
                 const alreadyAdded = results.filter(r => r.success && r.alreadyAdded);
@@ -251,11 +196,6 @@ export function createManageConnectorExecute(
                 });
             }
 
-            if (storeFailed.length > 0) {
-                message += `\nConnector store outage impacted ${storeFailed.length} item(s). `;
-                message += `Those items were not in cache or fallback data.`;
-            }
-
             return {
                 success: successful.length > 0,
                 message: message.trim()
@@ -277,9 +217,7 @@ export function createManageConnectorExecute(
 async function processItem(
     itemName: string,
     itemType: 'connector' | 'inbound',
-    resolvedItem: ConnectorDefinition | null,
-    usedFallback: boolean,
-    storeFailure: boolean,
+    dbEntry: ConnectorDefinition | null,
     existingDependencies: ExistingDependencies,
     miVisualizerRpcManager: MiVisualizerRpcManager,
     isAdd: boolean,
@@ -287,21 +225,18 @@ async function processItem(
     toolName: string
 ): Promise<ProcessItemResult> {
     try {
-        if (!resolvedItem) {
+        if (!dbEntry) {
             return {
                 name: itemName,
                 type: itemType,
                 success: false,
-                storeFailure,
-                error: storeFailure
-                    ? `${itemType === 'connector' ? 'Connector' : 'Inbound endpoint'} is unavailable because connector store is unavailable and no cache/fallback definition exists`
-                    : `${itemType === 'connector' ? 'Connector' : 'Inbound endpoint'} not found in connector store or fallback`
+                error: `${itemType === 'connector' ? 'Connector' : 'Inbound endpoint'} '${itemName}' not found`
             };
         }
 
-        const mavenGroupId = typeof resolvedItem?.mavenGroupId === 'string' ? resolvedItem.mavenGroupId.trim() : '';
-        const mavenArtifactId = typeof resolvedItem?.mavenArtifactId === 'string' ? resolvedItem.mavenArtifactId.trim() : '';
-        const versionTag = typeof resolvedItem?.version?.tagName === 'string' ? resolvedItem.version.tagName.trim() : '';
+        const mavenGroupId = typeof dbEntry.mavenGroupId === 'string' ? dbEntry.mavenGroupId.trim() : '';
+        const mavenArtifactId = typeof dbEntry.mavenArtifactId === 'string' ? dbEntry.mavenArtifactId.trim() : '';
+        const versionTag = typeof dbEntry.version?.tagName === 'string' ? dbEntry.version.tagName.trim() : '';
 
         if (!mavenGroupId || !mavenArtifactId) {
             return {
@@ -336,7 +271,6 @@ async function processItem(
                     type: itemType,
                     success: true,
                     alreadyAdded: true,
-                    usedFallback
                 };
             }
         }
@@ -358,7 +292,7 @@ async function processItem(
         });
 
         if (response) {
-            return { name: itemName, type: itemType, success: true, usedFallback };
+            return { name: itemName, type: itemType, success: true };
         } else {
             return {
                 name: itemName,

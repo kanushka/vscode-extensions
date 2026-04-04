@@ -377,6 +377,10 @@ export class ExtendedLanguageClient extends LanguageClient {
         return this.sendRequest('synapse/updateDependency', req);
     }
 
+    async resolveDependency(req: UpdateDependenciesRequest): Promise<UpdateDependenciesResponse> {
+        return this.sendRequest('synapse/resolveDependency', req);
+    }
+
     async updateConnectorDependencies(): Promise<string> {
         return this.sendRequest('synapse/updateConnectorDependencies');
     }
