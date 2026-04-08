@@ -50,6 +50,8 @@ export const BI_COMMANDS = {
     BI_ADD_TEST_FUNCTION: 'BI.test.add.function',
     BI_EDIT_TEST_FUNCTION_DEF: 'BI.test.edit.function.def',
     ADD_NATURAL_FUNCTION: 'BI.project-explorer.add-natural-function',
+    ADD_WORKFLOW: 'BI.project-explorer.add-workflow',
+    ADD_WORKFLOW_ACTIVITY: 'BI.project-explorer.add-workflow-activity',
     TOGGLE_TRACE_LOGS: 'BI.toggle.trace.logs',
     DEVANT_PUSH_TO_CLOUD: 'BI.devant.push.cloud',
     CREATE_BI_PROJECT: 'BI.project.createBIProjectPure',

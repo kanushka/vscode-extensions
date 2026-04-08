@@ -316,6 +316,8 @@ export enum DIRECTORY_MAP {
     SERVICE = "SERVICE",
     TYPE = "TYPE",
     VARIABLE = "VARIABLE",
+    WORKFLOW = "WORKFLOW",
+    ACTIVITY = "ACTIVITY",
 }
 
 export enum FUNCTION_TYPE {
@@ -339,6 +341,8 @@ export type ProjectDirectoryMap = {
     [DIRECTORY_MAP.NP_FUNCTION]: ProjectStructureArtifactResponse[];
     [DIRECTORY_MAP.AGENTS]: ProjectStructureArtifactResponse[];
     [DIRECTORY_MAP.LOCAL_CONNECTORS]: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.WORKFLOW]?: ProjectStructureArtifactResponse[];
+    [DIRECTORY_MAP.ACTIVITY]?: ProjectStructureArtifactResponse[];
 };
 
 /**
