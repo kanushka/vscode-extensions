@@ -470,6 +470,34 @@ function getEntriesBI(project: ProjectStructure): ProjectExplorerEntry[] {
     }
     entries.push(dataMappers);
 
+    // ---------- Workflows ----------
+    const workflowChildren = getComponents(project.directoryMap[DIRECTORY_MAP.WORKFLOW] ?? [], DIRECTORY_MAP.WORKFLOW, projectPath);
+    const workflows = new ProjectExplorerEntry(
+        'Workflows',
+        workflowChildren.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
+        null,
+        'workflow',
+        false
+    );
+    workflows.resourceUri = Uri.parse(`bi-category:${projectPath}`);
+    workflows.contextValue = 'workflows';
+    workflows.children = workflowChildren;
+    entries.push(workflows);
+
+    // ---------- Workflow Activities ----------
+    const activityChildren = getComponents(project.directoryMap[DIRECTORY_MAP.ACTIVITY] ?? [], DIRECTORY_MAP.ACTIVITY, projectPath);
+    const workflowActivities = new ProjectExplorerEntry(
+        'Workflow Activities',
+        activityChildren.length > 0 ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed,
+        null,
+        'task',
+        false
+    );
+    workflowActivities.resourceUri = Uri.parse(`bi-category:${projectPath}`);
+    workflowActivities.contextValue = 'workflowActivities';
+    workflowActivities.children = activityChildren;
+    entries.push(workflowActivities);
+
     // ---------- Configurations ----------
     const configs = new ProjectExplorerEntry(
         "Configurations",
@@ -530,11 +558,16 @@ function getComponents(items: ProjectStructureArtifactResponse[], itemType: DIRE
         if (comp.type !== itemType) {
             continue;
         }
+        const entryIcon = itemType === DIRECTORY_MAP.WORKFLOW
+            ? 'workflow'
+            : itemType === DIRECTORY_MAP.ACTIVITY
+                ? 'task'
+                : comp.icon;
         const fileEntry = new ProjectExplorerEntry(
             comp.name,
             vscode.TreeItemCollapsibleState.None,
             comp.path,
-            comp.icon,
+            entryIcon,
             false,
             comp.position
         );
