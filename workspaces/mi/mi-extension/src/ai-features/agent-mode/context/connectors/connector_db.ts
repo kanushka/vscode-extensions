@@ -9374,7 +9374,7 @@ export const CONNECTOR_DB = [
     },
     {
         "connectorName": "Creatio",
-        "repoName": "",
+        "repoName": "esb-connector-creatio",
         "description": "The Creatio Connector allows you to work with almost all the entities and functionalities of Creatio through REST interface, a web-based service that allows organisations to manage Customer Relationship Management (CRM) data while integration with external services/applications. You can use the Creatio connector to create, query, retrieve, update, and delete any of the objects that are exposed through the Creatio REST API layer by adding the authentication. It contains Contact, Case and Account mediators to manage CRUD operations through REST APIs. The Creatio Connector was contributed by Mitra Innovation.",
         "connectorType": "Connector",
         "mavenGroupId": "",
