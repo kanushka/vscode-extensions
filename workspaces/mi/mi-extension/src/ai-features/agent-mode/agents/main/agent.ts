@@ -43,7 +43,6 @@ import {
     PendingPlanApproval,
 } from '../../tools/plan_mode_tools';
 import { getRuntimeVersionFromPom } from '../../tools/connector_store_cache';
-import { DEEPWIKI_MCP_TOOL_NAMES, DEEPWIKI_MCP_SERVER_CONFIG } from '../../tools/deepwiki_tools';
 import { createMemoryExecute, createReadOnlyMemoryExecute } from '../../tools/memory_tools';
 import { getCopilotProjectMemoriesDir } from '../../storage-paths';
 import {
@@ -64,6 +63,7 @@ import {
     KILL_TASK_TOOL_NAME,
     WEB_SEARCH_TOOL_NAME,
     WEB_FETCH_TOOL_NAME,
+    DEEPWIKI_ASK_QUESTION_TOOL_NAME,
 } from './tools';
 import { logInfo, logError, logDebug } from '../../../copilot/logger';
 import { ChatHistoryManager, TOOL_USE_INTERRUPTION_CONTEXT } from '../../chat-history-manager';
@@ -707,9 +707,6 @@ export async function executeAgent(
             providerOptions: {
                 anthropic: {
                     ...anthropicOptions,
-                    // DeepWiki MCP — Anthropic handles MCP calls server-side.
-                    // Tool calls appear in the stream as mcp_tool_use / mcp_tool_result blocks.
-                    mcpServers: [DEEPWIKI_MCP_SERVER_CONFIG],
                 },
             },
             prepareStep,
@@ -1074,9 +1071,11 @@ export async function executeAgent(
                             allowed_domains: toolInput?.allowed_domains,
                             blocked_domains: toolInput?.blocked_domains,
                         };
-                    } else if (DEEPWIKI_MCP_TOOL_NAMES.includes(part.toolName)) {
-                        // DeepWiki MCP tools — pass through all input for display
-                        displayInput = toolInput;
+                    } else if (part.toolName === DEEPWIKI_ASK_QUESTION_TOOL_NAME) {
+                        displayInput = {
+                            repoName: toolInput?.repoName,
+                            question: toolInput?.question,
+                        };
                     }
 
                     // Skip tool call UI for todo_write (handled by inline todo list)

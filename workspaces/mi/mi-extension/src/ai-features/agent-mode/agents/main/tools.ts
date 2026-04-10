@@ -93,6 +93,10 @@ import {
     createReadServerLogsTool,
     createReadServerLogsExecute,
 } from '../../tools/log_tools';
+import {
+    createDeepWikiTool,
+    createDeepWikiExecute,
+} from '../../tools/deepwiki_tools';
 import { createToolSearchTool } from '../../tools/tool_load';
 import { AnthropicModel, resolveMainModelId } from '../../../connection';
 import { AgentMode, ModelSettings } from '@wso2/mi-core';
@@ -124,6 +128,7 @@ import {
     ToolResult,
     WEB_SEARCH_TOOL_NAME,
     WEB_FETCH_TOOL_NAME,
+    DEEPWIKI_ASK_QUESTION_TOOL_NAME,
     READ_SERVER_LOGS_TOOL_NAME,
     TOOL_LOAD_TOOL_NAME,
     ShellApprovalRuleStore,
@@ -160,6 +165,7 @@ export {
     TASK_OUTPUT_TOOL_NAME,
     WEB_SEARCH_TOOL_NAME,
     WEB_FETCH_TOOL_NAME,
+    DEEPWIKI_ASK_QUESTION_TOOL_NAME,
     READ_SERVER_LOGS_TOOL_NAME,
     TOOL_LOAD_TOOL_NAME,
 };
@@ -208,6 +214,7 @@ const READ_ONLY_MODE_ALLOWED_TOOLS = new Set<string>([
     VALIDATE_CODE_TOOL_NAME,
     WEB_SEARCH_TOOL_NAME,
     WEB_FETCH_TOOL_NAME,
+    DEEPWIKI_ASK_QUESTION_TOOL_NAME,
     SERVER_MANAGEMENT_TOOL_NAME,
     READ_SERVER_LOGS_TOOL_NAME,
 ]);
@@ -541,7 +548,7 @@ function createToolExecutionPipeline<T extends (...args: any[]) => Promise<ToolR
  * This ensures consistent tool definitions across main agent and compact agent.
  *
  * @param params - Tool creation parameters
- * @returns Tools object with all 23 tools
+ * @returns Tools object with all agent tools
  */
 export function createAgentTools(params: CreateToolsParams) {
     const {
@@ -682,6 +689,9 @@ export function createAgentTools(params: CreateToolsParams) {
                 mainModelId,
                 mainModelIsCustom
             ))
+        ),
+        [DEEPWIKI_ASK_QUESTION_TOOL_NAME]: createDeepWikiTool(
+            getWrappedExecute(DEEPWIKI_ASK_QUESTION_TOOL_NAME, createDeepWikiExecute())
         ),
 
         // Log Tools (1 tool)

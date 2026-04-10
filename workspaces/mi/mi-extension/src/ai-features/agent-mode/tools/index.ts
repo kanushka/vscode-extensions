@@ -149,10 +149,10 @@ export {
     createWebFetchTool,
 } from './web_tools';
 
-// Export deepwiki MCP constants
+// Export DeepWiki tool
 export {
-    DEEPWIKI_MCP_SERVER_CONFIG,
-    DEEPWIKI_MCP_TOOL_NAMES,
+    createDeepWikiExecute,
+    createDeepWikiTool,
 } from './deepwiki_tools';
 
 // Export log tools

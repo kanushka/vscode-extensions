@@ -169,8 +169,9 @@ export const DEFERRED_TOOLS = new Set<string>([
     READ_SERVER_LOGS_TOOL_NAME,
 ]);
 
-// DeepWiki MCP Tool (Anthropic prefixes with server name: deepwiki_ask_question)
-export const DEEPWIKI_ASK_QUESTION_TOOL_NAME = 'ask_question';
+// DeepWiki Tool (local MCP client bridge)
+export const DEEPWIKI_MCP_TOOL_NAME = 'ask_question';           // MCP server's actual tool name
+export const DEEPWIKI_ASK_QUESTION_TOOL_NAME = 'deepwiki_ask_question'; // name exposed to Claude
 
 // ============================================================================
 // Subagent Types
@@ -393,6 +394,15 @@ export type WebFetchExecuteFn = (args: {
     prompt: string;
     allowed_domains?: string[];
     blocked_domains?: string[];
+}) => Promise<ToolResult>;
+
+// ============================================================================
+// DeepWiki Tool Execute Function Types
+// ============================================================================
+
+export type DeepWikiAskQuestionExecuteFn = (args: {
+    repoName: string | string[];
+    question: string;
 }) => Promise<ToolResult>;
 
 // ============================================================================
