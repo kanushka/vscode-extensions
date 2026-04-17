@@ -1026,6 +1026,15 @@ function setupConfigFiles(projectUri: string): void {
     }
 }
 
+export function getProjectJavaVersion(projectUri: string): string | null {
+    const config = vscode.workspace.getConfiguration('MI', vscode.Uri.file(projectUri));
+    const javaHome = config.get<string>(SELECTED_JAVA_HOME);
+    if (!javaHome) {
+        return null;
+    }
+    return getJavaVersion(path.join(javaHome, 'bin'));
+}
+
 export function getJavaHomeFromConfig(projectUri: string): string | undefined {
     const config = vscode.workspace.getConfiguration('MI', vscode.Uri.file(projectUri));
     const currentJavaHome = config.get<string>(SELECTED_JAVA_HOME);
@@ -1076,8 +1085,39 @@ export function getDefaultProjectPath(): string {
 }
 
 export async function buildBallerinaModule(projectPath: string) {
+    const MIN_REQUIRED_UPDATE = 13;
     const isBallerinaInstalled = await isBallerinaAvailableGlobally();
-    if (isBallerinaInstalled || fs.existsSync(path.join(os.homedir(), '.ballerina', 'ballerina-home', 'bin', process.platform === 'win32' ? 'bal.bat' : 'bal'))) {
+    const isLocalBallerina = fs.existsSync(path.join(os.homedir(), '.ballerina', 'ballerina-home', 'bin', process.platform === 'win32' ? 'bal.bat' : 'bal'));
+
+    if (isBallerinaInstalled || isLocalBallerina) {
+        const updateNumber = await getBallerinaVersion(isBallerinaInstalled);
+
+        if (updateNumber !== null && updateNumber < MIN_REQUIRED_UPDATE) {
+            const selection = await vscode.window.showWarningMessage(
+                `Ballerina Swan Lake Update ${updateNumber} is installed, but Update ${MIN_REQUIRED_UPDATE} or higher is required. Would you like to update Ballerina now?`,
+                { modal: true },
+                'Update'
+            );
+
+            if (selection !== 'Update') {
+                vscode.window.showErrorMessage(`Ballerina Update ${MIN_REQUIRED_UPDATE} or higher is required. Build process stopped.`);
+                return;
+            }
+
+            let updateSucceeded = false;
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: 'Updating Ballerina...', cancellable: false },
+                async () => {
+                    updateSucceeded = await updateBallerinaDistribution(isBallerinaInstalled);
+                }
+            );
+
+            if (!updateSucceeded) {
+                vscode.window.showErrorMessage('Failed to update Ballerina. Please update manually and try again.');
+                return;
+            }
+        }
+
         await runBallerinaBuildsWithProgress(projectPath, isBallerinaInstalled);
     } else {
         vscode.window.showErrorMessage('Ballerina not found. Please download Ballerina and try again.');
@@ -1306,6 +1346,53 @@ async function isBallerinaAvailableGlobally(): Promise<boolean> {
         const proc = child_process.spawn("bal version", [], { shell: true });
         proc.on("error", () => resolve(false));
         proc.on("exit", (code) => resolve(code === 0));
+    });
+}
+
+// Returns the Swan Lake update number (e.g. 13 for version 2201.13.x), or null if it cannot be determined.
+async function getBallerinaVersion(isBallerinaInstalledGlobally: boolean): Promise<number | null> {
+    return new Promise<number | null>((resolve) => {
+        const isWindows = process.platform === 'win32';
+        let command: string;
+
+        if (isBallerinaInstalledGlobally) {
+            command = isWindows ? 'bal.bat version' : 'bal version';
+        } else {
+            const balHome = path.normalize(path.join(os.homedir(), '.ballerina', 'ballerina-home', 'bin'));
+            const balExecutable = isWindows ? 'bal.bat' : 'bal';
+            const balCommand = path.join(balHome, balExecutable);
+            command = `"${balCommand}" version`;
+        }
+
+        const proc = child_process.spawn(command, [], { shell: true });
+        let output = '';
+        proc.stdout?.on('data', (data: Buffer) => { output += data.toString(); });
+        proc.on('error', () => resolve(null));
+        proc.on('close', () => {
+            // Matches version strings like "Ballerina 2201.13.0 (Swan Lake Update 13)"
+            const match = output.match(/Ballerina\s+2201\.(\d+)\.\d+/);
+            resolve(match ? parseInt(match[1], 10) : null);
+        });
+    });
+}
+
+async function updateBallerinaDistribution(isBallerinaInstalledGlobally: boolean): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+        const isWindows = process.platform === 'win32';
+        let command: string;
+
+        if (isBallerinaInstalledGlobally) {
+            command = isWindows ? 'bal.bat dist update' : 'bal dist update';
+        } else {
+            const balHome = path.normalize(path.join(os.homedir(), '.ballerina', 'ballerina-home', 'bin'));
+            const balExecutable = isWindows ? 'bal.bat' : 'bal';
+            const balCommand = path.join(balHome, balExecutable);
+            command = `"${balCommand}" dist update`;
+        }
+
+        const proc = child_process.spawn(command, [], { shell: true });
+        proc.on('error', () => resolve(false));
+        proc.on('close', (code) => resolve(code === 0));
     });
 }
 
