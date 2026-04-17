@@ -49,12 +49,16 @@ export {
 
 // Export connector LS client
 export {
-    resolveConnectorViaLS,
-    getConnectorFromLS,
-    getAllConnectorsFromLS,
+    getConnectorInfoFromLS,
+    getInboundInfoFromLS,
+    getLocalInboundCatalog,
     readOutputSchema,
     type LSConnectorResult,
     type LSConnectorAction,
+    type LSInboundResult,
+    type LSInboundParameter,
+    type LocalInboundCatalog,
+    type LocalInboundCatalogEntry,
 } from './connector_ls_client';
 
 // Export deep-context tools

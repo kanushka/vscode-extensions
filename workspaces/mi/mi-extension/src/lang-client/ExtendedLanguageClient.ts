@@ -28,6 +28,10 @@ import {
     ProjectStructureResponse,
     GetAvailableConnectorRequest,
     GetAvailableConnectorResponse,
+    GetConnectorInfoRequest,
+    GetConnectorInfoResponse,
+    GetInboundInfoRequest,
+    GetInboundInfoResponse,
     UpdateConnectorRequest,
     GetConnectorConnectionsRequest,
     GetConnectorConnectionsResponse,
@@ -281,6 +285,18 @@ export class ExtendedLanguageClient extends LanguageClient {
         return this.sendRequest("textDocument/rangeFormatting", req)
     }
 
+    // Returns a full connector object on success, or a plain string error message on failure.
+    // Single-call replacement for the old resolveConnector + availableConnectors two-step.
+    async getConnectorInfo(req: GetConnectorInfoRequest): Promise<GetConnectorInfoResponse> {
+        return this.sendRequest("synapse/getConnectorInfo", req);
+    }
+
+    // Accepts either { id } for bundled inbounds or Maven coords for downloadable ones.
+    // Returns an InboundEndpointInfo on success, or a plain string error message on failure.
+    async getInboundInfo(req: GetInboundInfoRequest): Promise<GetInboundInfoResponse> {
+        return this.sendRequest("synapse/getInboundInfo", req);
+    }
+
     async getAvailableConnectors(req: GetAvailableConnectorRequest): Promise<GetAvailableConnectorResponse> {
         return this.sendRequest("synapse/availableConnectors", { documentIdentifier: { uri: Uri.file(req.documentUri).toString() }, "connectorName": req.connectorName });
     }
@@ -375,10 +391,6 @@ export class ExtendedLanguageClient extends LanguageClient {
 
     async updateDependencies(req: UpdateDependenciesRequest): Promise<UpdateDependenciesResponse> {
         return this.sendRequest('synapse/updateDependency', req);
-    }
-
-    async resolveDependency(req: UpdateDependenciesRequest): Promise<UpdateDependenciesResponse> {
-        return this.sendRequest('synapse/resolveDependency', req);
     }
 
     async updateConnectorDependencies(): Promise<string> {

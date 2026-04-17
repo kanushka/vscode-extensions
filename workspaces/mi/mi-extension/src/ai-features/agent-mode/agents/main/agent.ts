@@ -1012,10 +1012,12 @@ export async function executeAgent(
                         displayInput = { file_path: toolInput?.file_path };
                     } else if (part.toolName === CONNECTOR_TOOL_NAME) {
                         displayInput = {
-                            name: toolInput?.name,
+                            artifact_id: toolInput?.artifact_id,
                             include_full_descriptions: toolInput?.include_full_descriptions,
                             operation_names: toolInput?.operation_names,
                             connection_names: toolInput?.connection_names,
+                            parameter_names: toolInput?.parameter_names,
+                            version: toolInput?.version,
                         };
                     } else if (part.toolName === CONTEXT_TOOL_NAME) {
                         displayInput = {
@@ -1024,8 +1026,9 @@ export async function executeAgent(
                     } else if (part.toolName === MANAGE_CONNECTOR_TOOL_NAME) {
                         displayInput = {
                             operation: toolInput?.operation,
-                            connector_names: toolInput?.connector_names,
-                            inbound_endpoint_names: toolInput?.inbound_endpoint_names,
+                            connector_artifact_ids: toolInput?.connector_artifact_ids,
+                            inbound_artifact_ids: toolInput?.inbound_artifact_ids,
+                            versions: toolInput?.versions,
                         };
                     } else if (part.toolName === VALIDATE_CODE_TOOL_NAME) {
                         displayInput = {

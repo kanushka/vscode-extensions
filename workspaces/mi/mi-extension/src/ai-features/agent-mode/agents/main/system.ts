@@ -138,9 +138,12 @@ ${Object.entries(DEFERRED_TOOL_DESCRIPTIONS).map(([name, desc]) => `- ${name}: $
 ## Background tasks
 - Background tasks from ${BASH_TOOL_NAME} and ${SUBAGENT_TOOL_NAME} share the same task_id workflow: ${TASK_OUTPUT_TOOL_NAME} to check output, ${KILL_TASK_TOOL_NAME} to terminate.
 
-## Connectors (${CONNECTOR_TOOL_NAME})
-- Fetches one connector or inbound endpoint per call. For multiple, call in parallel.
-- Read the summary first; request include_full_descriptions=true only when parameter details are needed, with exact operation_names/connection_names.
+## Connectors and inbound endpoints (${CONNECTOR_TOOL_NAME}, ${MANAGE_CONNECTOR_TOOL_NAME})
+- Use Maven artifact ids from the <available_*> lists ("mi-connector-redis", "mi-inbound-amazonsqs") or bundled inbound ids ("http", "jms", ...). Display names like "Redis" are not accepted.
+- Bundled inbound ids work out of the box — do NOT run ${MANAGE_CONNECTOR_TOOL_NAME} on them; reference them straight from Synapse XML.
+- Default call (no include_full_descriptions) returns a summary: operations/parameters, version source, init flags (connectors). Set include_full_descriptions=true with specific operation_names/connection_names (connectors) or parameter_names (inbounds) for deep details (xsdType, required, description, outputSchema). That mode does NOT re-print the summary — call the default first if you still need it.
+- For inbound endpoints, the default summary usually already contains all parameter names; make a second call only when you need type/required/description for specific parameters before writing XML.
+- Call ${CONNECTOR_TOOL_NAME} in parallel for multiple artifacts.
 - Use ${CONTEXT_TOOL_NAME} only for specialized connector guidance.
 
 ## Web tools

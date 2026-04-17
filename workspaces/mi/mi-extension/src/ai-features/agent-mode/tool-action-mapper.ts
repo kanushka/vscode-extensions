@@ -69,14 +69,14 @@ export function getToolAction(toolName: string, toolResult?: any, toolInput?: an
             return { loading: 'finding files', completed: 'found files', failed: 'failed to find files' };
 
         case CONNECTOR_TOOL_NAME: {
-            const targetName = toolInput?.name;
-            if (typeof targetName === 'string') {
-                const trimmedName = targetName.trim();
-                if (trimmedName.length > 0) {
+            const targetId = toolInput?.artifact_id;
+            if (typeof targetId === 'string') {
+                const trimmedId = targetId.trim();
+                if (trimmedId.length > 0) {
                     return {
-                        loading: `fetching ${trimmedName}`,
-                        completed: `fetched ${trimmedName}`,
-                        failed: `failed to fetch ${trimmedName}`
+                        loading: `fetching ${trimmedId}`,
+                        completed: `fetched ${trimmedId}`,
+                        failed: `failed to fetch ${trimmedId}`
                     };
                 }
             }
@@ -87,12 +87,12 @@ export function getToolAction(toolName: string, toolResult?: any, toolInput?: an
             return { loading: 'loading deep context', completed: 'loaded deep context', failed: 'failed to load deep context' };
 
         case MANAGE_CONNECTOR_TOOL_NAME: {
-            // Extract operation, connector names, and inbound endpoint names from tool input
+            // Extract operation and artifact ids from tool input.
             const operation = toolInput?.operation || 'managing';
             const isAdding = operation === 'add';
-            const connectorNames = toolInput?.connector_names || [];
-            const inboundNames = toolInput?.inbound_endpoint_names || [];
-            const allNames = [...connectorNames, ...inboundNames];
+            const connectorIds = toolInput?.connector_artifact_ids || [];
+            const inboundIds = toolInput?.inbound_artifact_ids || [];
+            const allNames = [...connectorIds, ...inboundIds];
             
             if (allNames.length > 0) {
                 const itemList = allNames.length === 1

@@ -22,7 +22,7 @@ import { MILanguageClient } from '../../../lang-client/activator';
 import { logDebug, logWarn } from '../../copilot/logger';
 
 // ============================================================================
-// Types
+// Types — connector path
 // ============================================================================
 
 export interface LSConnectorAction {
@@ -50,45 +50,61 @@ export interface LSConnectorResult {
     version: string;
     packageName: string;
     uiSchemaPath: string;
-    outputSchemaPath: string;
+    outputSchemaPath: string;   // connector-level directory for per-action <name>.json files
     connectionUiSchema: Record<string, string>;
     actions: LSConnectorAction[];
 }
 
 // ============================================================================
-// Internal Helpers
+// Types — inbound path
 // ============================================================================
 
-/**
- * Find a document URI within the project for LS requests.
- * Uses pom.xml as the reference document.
- */
-function getDocumentUri(projectPath: string): string {
-    return path.join(projectPath, 'pom.xml');
+export interface LSInboundParameter {
+    name: string;
+    description: string;
+    required: boolean;
+    xsdType: string;
 }
 
-/**
- * Normalize a connector name for LS lookup.
- * The LS uses lowercase internal names (e.g. "gmail"), but the agent may pass
- * "Gmail", "mi-connector-gmail", "esb-connector-amazons3", etc.
- */
-function normalizeConnectorNameForLS(name: string): string {
-    let normalized = name.trim().toLowerCase();
-    // Strip known artifact ID prefixes
-    normalized = normalized.replace(/^(mi-(connector|module|inbound)|esb-connector)-/, '');
-    return normalized;
+export interface LSInboundResult {
+    name: string;
+    id: string;
+    displayName: string;
+    description: string;
+    type: string;                       // "inbuilt-inbound-endpoint" | "event-integration" | ...
+    source: 'bundled' | 'downloaded';
+    parameters: LSInboundParameter[];
 }
 
-/**
- * Map raw LS action data to typed LSConnectorAction.
- */
+// ============================================================================
+// Types — local inbound catalog (discovery)
+// ============================================================================
+
+export interface LocalInboundCatalogEntry {
+    id: string;
+    name: string;
+    description?: string;
+    type: 'bundled' | 'maven-or-custom';
+}
+
+export interface LocalInboundCatalog {
+    bundled: LocalInboundCatalogEntry[];
+    maven: LocalInboundCatalogEntry[];
+}
+
+// ============================================================================
+// Internal mapping helpers
+// ============================================================================
+
 function mapAction(raw: any): LSConnectorAction {
+    // LS uses `isHidden` on the wire (old spec also had `hidden`). Accept either.
+    const hidden = raw?.isHidden === true || raw?.hidden === true;
     return {
         name: typeof raw?.name === 'string' ? raw.name : '',
         tag: typeof raw?.tag === 'string' ? raw.tag : '',
         displayName: typeof raw?.displayName === 'string' ? raw.displayName : '',
         description: typeof raw?.description === 'string' ? raw.description : '',
-        isHidden: raw?.hidden === true,
+        isHidden: hidden,
         supportsResponseModel: raw?.supportsResponseModel === true,
         canActAsAgentTool: raw?.canActAsAgentTool !== false, // defaults to true
         allowedConnectionTypes: Array.isArray(raw?.allowedConnectionTypes) ? raw.allowedConnectionTypes : [],
@@ -104,14 +120,10 @@ function mapAction(raw: any): LSConnectorAction {
     };
 }
 
-/**
- * Map raw LS connector response to typed LSConnectorResult.
- */
 function mapConnectorResult(raw: any): LSConnectorResult | null {
-    if (!raw || typeof raw.name !== 'string') {
+    if (!raw || typeof raw !== 'object' || typeof raw.name !== 'string') {
         return null;
     }
-
     return {
         name: raw.name,
         displayName: typeof raw.displayName === 'string' ? raw.displayName : raw.name,
@@ -127,125 +139,168 @@ function mapConnectorResult(raw: any): LSConnectorResult | null {
     };
 }
 
+function mapInboundResult(raw: any): LSInboundResult | null {
+    if (!raw || typeof raw !== 'object' || typeof raw.name !== 'string' || typeof raw.id !== 'string') {
+        return null;
+    }
+    const source = raw.source === 'bundled' ? 'bundled' : raw.source === 'downloaded' ? 'downloaded' : null;
+    if (source === null) {
+        return null;
+    }
+    return {
+        name: raw.name,
+        id: raw.id,
+        displayName: typeof raw.displayName === 'string' ? raw.displayName : raw.name,
+        description: typeof raw.description === 'string' ? raw.description : '',
+        type: typeof raw.type === 'string' ? raw.type : '',
+        source,
+        parameters: Array.isArray(raw.parameters)
+            ? raw.parameters.map((p: any) => ({
+                name: typeof p?.name === 'string' ? p.name : '',
+                description: typeof p?.description === 'string' ? p.description : '',
+                required: p?.required === true,
+                xsdType: typeof p?.xsdType === 'string' ? p.xsdType : 'xs:string',
+            }))
+            : [],
+    };
+}
+
 // ============================================================================
 // Public API
 // ============================================================================
 
 /**
- * Resolve a connector via LS — downloads/extracts WITHOUT modifying pom.xml.
- * Uses the new synapse/resolveDependency endpoint.
+ * Fetch a connector's full metadata by Maven coordinates via `synapse/getConnectorInfo`.
+ * LS downloads + extracts the zip if not already cached. Single call; no separate resolve step.
+ *
+ * Returns the mapped result on success, or a `{ error }` envelope when the LS returns a string error
+ * (e.g. "Artifact not found on WSO2 Nexus: ...").
  */
-export async function resolveConnectorViaLS(
+export async function getConnectorInfoFromLS(
     projectPath: string,
-    dependencies: Array<{ groupId: string; artifact: string; version: string; type?: string }>
-): Promise<boolean> {
+    groupId: string,
+    artifactId: string,
+    version: string
+): Promise<LSConnectorResult | { error: string }> {
     try {
         const langClient = await MILanguageClient.getInstance(projectPath);
         if (!langClient) {
-            logWarn('[ConnectorLSClient] Language client not available');
-            return false;
+            return { error: 'Language client not available' };
         }
-
-        await langClient.resolveDependency({ dependencies: dependencies.map(d => ({ ...d, type: d.type as any })) });
-        logDebug(`[ConnectorLSClient] Resolved ${dependencies.length} dependency(ies) via LS`);
-        return true;
+        const response = await langClient.getConnectorInfo({ groupId, artifactId, version });
+        // Error path: LS returns a plain string message on failure.
+        if (typeof response === 'string') {
+            logDebug(`[ConnectorLSClient] getConnectorInfo error for ${artifactId}:${version}: ${response}`);
+            return { error: response };
+        }
+        const mapped = mapConnectorResult(response);
+        if (!mapped) {
+            return { error: `Unexpected response shape from synapse/getConnectorInfo for ${artifactId}:${version}` };
+        }
+        return mapped;
     } catch (error) {
-        logWarn(`[ConnectorLSClient] Failed to resolve dependencies via LS: ${error instanceof Error ? error.message : String(error)}`);
-        return false;
+        const msg = error instanceof Error ? error.message : String(error);
+        logWarn(`[ConnectorLSClient] getConnectorInfo threw for ${artifactId}:${version}: ${msg}`);
+        return { error: msg };
     }
 }
 
 /**
- * Get a single installed/resolved connector from the LS.
- * Returns null if the connector is not available or LS is unavailable.
+ * Fetch an inbound endpoint's metadata via `synapse/getInboundInfo`.
+ * Either a bundled id (e.g. "jms") or Maven coords (e.g. mi-inbound-amazonsqs).
  */
-export async function getConnectorFromLS(
+export async function getInboundInfoFromLS(
     projectPath: string,
-    connectorName: string
-): Promise<LSConnectorResult | null> {
+    req: { id?: string; groupId?: string; artifactId?: string; version?: string }
+): Promise<LSInboundResult | { error: string }> {
     try {
         const langClient = await MILanguageClient.getInstance(projectPath);
         if (!langClient) {
-            logWarn('[ConnectorLSClient] Language client not available');
-            return null;
+            return { error: 'Language client not available' };
         }
-
-        const documentUri = getDocumentUri(projectPath);
-        const normalizedName = normalizeConnectorNameForLS(connectorName);
-        const response = await langClient.getAvailableConnectors({
-            documentUri,
-            connectorName: normalizedName,
-        });
-
-        if (!response || !response.name) {
-            logDebug(`[ConnectorLSClient] Connector '${connectorName}' not found in LS`);
-            return null;
+        const response = await langClient.getInboundInfo(req);
+        if (typeof response === 'string') {
+            logDebug(`[ConnectorLSClient] getInboundInfo error for ${JSON.stringify(req)}: ${response}`);
+            return { error: response };
         }
-
-        return mapConnectorResult(response);
+        const mapped = mapInboundResult(response);
+        if (!mapped) {
+            return { error: `Unexpected response shape from synapse/getInboundInfo for ${JSON.stringify(req)}` };
+        }
+        return mapped;
     } catch (error) {
-        logWarn(`[ConnectorLSClient] Failed to get connector '${connectorName}' from LS: ${error instanceof Error ? error.message : String(error)}`);
-        return null;
-    }
-}
-
-/**
- * Get all installed/resolved connectors from the LS.
- */
-export async function getAllConnectorsFromLS(
-    projectPath: string
-): Promise<LSConnectorResult[]> {
-    try {
-        const langClient = await MILanguageClient.getInstance(projectPath);
-        if (!langClient) {
-            logWarn('[ConnectorLSClient] Language client not available');
-            return [];
-        }
-
-        const documentUri = getDocumentUri(projectPath);
-        const response = await langClient.getAvailableConnectors({
-            documentUri,
-            connectorName: '',
-        });
-
-        if (!response || !Array.isArray(response.connectors)) {
-            return [];
-        }
-
-        const results: LSConnectorResult[] = [];
-        for (const raw of response.connectors) {
-            const mapped = mapConnectorResult(raw);
-            if (mapped) {
-                results.push(mapped);
-            }
-        }
-
-        logDebug(`[ConnectorLSClient] Found ${results.length} connector(s) from LS`);
-        return results;
-    } catch (error) {
-        logWarn(`[ConnectorLSClient] Failed to get connectors from LS: ${error instanceof Error ? error.message : String(error)}`);
-        return [];
+        const msg = error instanceof Error ? error.message : String(error);
+        logWarn(`[ConnectorLSClient] getInboundInfo threw: ${msg}`);
+        return { error: msg };
     }
 }
 
 /**
  * Read the output schema JSON for a specific operation from disk.
- * Returns null if the file doesn't exist or can't be parsed.
+ * Returns null if the file doesn't exist or can't be parsed — callers decide
+ * whether that's a bug worth logging or just a legacy connector without
+ * per-action schemas.
  */
 export async function readOutputSchema(
     outputSchemaDir: string,
     operationName: string
 ): Promise<any | null> {
     try {
+        if (!outputSchemaDir) {
+            return null;
+        }
         const schemaPath = path.join(outputSchemaDir, `${operationName}.json`);
         if (!fs.existsSync(schemaPath)) {
             return null;
         }
-
         const content = fs.readFileSync(schemaPath, 'utf-8');
         return JSON.parse(content);
     } catch (error) {
         logDebug(`[ConnectorLSClient] Failed to read output schema for '${operationName}': ${error instanceof Error ? error.message : String(error)}`);
         return null;
+    }
+}
+
+/**
+ * Discover inbound endpoint types known to the LS/runtime — splits bundled (runtime-shipped)
+ * from Maven-or-custom (either in the store catalog or added under
+ * `src/main/wso2mi/resources/inbound-connectors/`).
+ *
+ * The bundled list is runtime-dependent — we do NOT hardcode it. Bundled `id`s are the
+ * values passed to `getInboundInfo({id})`. Maven entries' `id`s are consumer class FQNs
+ * and are NOT usable directly with `getInboundInfo` — use the mavenArtifactId from the
+ * connector store instead.
+ */
+export async function getLocalInboundCatalog(projectPath: string): Promise<LocalInboundCatalog> {
+    try {
+        const langClient = await MILanguageClient.getInstance(projectPath);
+        if (!langClient) {
+            return { bundled: [], maven: [] };
+        }
+        const response = (await langClient.getLocalInboundConnectors()) as
+            | { 'inbound-connector-data'?: unknown }
+            | undefined;
+        const data = response?.['inbound-connector-data'];
+        const entries: any[] = Array.isArray(data) ? data : [];
+        const bundled: LocalInboundCatalogEntry[] = [];
+        const maven: LocalInboundCatalogEntry[] = [];
+        for (const e of entries) {
+            const id = typeof e?.id === 'string' ? e.id : '';
+            const name = typeof e?.name === 'string' ? e.name : '';
+            if (!id || !name) {
+                continue;
+            }
+            const description = typeof e?.description === 'string' ? e.description : undefined;
+            if (e?.type === 'builtin-inbound-endpoint') {
+                bundled.push({ id, name, description, type: 'bundled' });
+            } else {
+                // 'inbound-endpoint' plus any future custom categorization
+                maven.push({ id, name, description, type: 'maven-or-custom' });
+            }
+        }
+        return { bundled, maven };
+    } catch (error) {
+        logWarn(`[ConnectorLSClient] getLocalInboundCatalog failed: ${error instanceof Error ? error.message : String(error)}`);
+        return { bundled: [], maven: [] };
     }
 }

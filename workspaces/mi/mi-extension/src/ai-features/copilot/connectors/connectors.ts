@@ -25,9 +25,9 @@ import { SYSTEM_TEMPLATE } from "./system";
 import { CONNECTOR_PROMPT } from "./prompt";
 import { CONNECTOR_DB } from "./connector_db";
 import { INBOUND_DB } from "./inbound_db";
-import { logInfo, logWarn, logError } from "../logger";
+import { logInfo, logWarn, logError, logDebug } from "../logger";
 import { buildMessageContent } from "../message-utils";
-import { resolveConnectorViaLS, getConnectorFromLS } from "../../agent-mode/tools/connector_ls_client";
+import { getConnectorInfoFromLS } from "../../agent-mode/tools/connector_ls_client";
 
 // Type definition for selected connectors
 type SelectedConnectors = {
@@ -111,18 +111,19 @@ async function enrichWithLSData(definition: any, name: string, projectPath?: str
     }
 
     try {
-        // Resolve the connector via LS first
         const groupId = definition.mavenGroupId;
         const artifactId = definition.mavenArtifactId;
         const version = definition.version?.tagName;
 
-        if (groupId && artifactId && version) {
-            await resolveConnectorViaLS(projectPath, [{ groupId, artifact: artifactId, version, type: 'zip' }]);
+        if (!groupId || !artifactId || !version) {
+            return definition;
         }
 
-        // Query LS for rich data
-        const lsResult = await getConnectorFromLS(projectPath, name);
-        if (!lsResult) {
+        // Single LS call: downloads + extracts + parses, returns the full Connector
+        // (or a { error } envelope which we treat as "LS data unavailable").
+        const lsResult = await getConnectorInfoFromLS(projectPath, groupId, artifactId, version);
+        if ('error' in lsResult) {
+            logDebug(`LS enrichment skipped for '${name}': ${lsResult.error}`);
             return definition;
         }
 

@@ -466,3 +466,16 @@ export interface MiDiagramAPI {
     canCreateConsolidatedProject: () => Promise<ProjectCreationStatusResponse>;
     createConsolidatedProjectFromWorkspace: (params: CreateProjectRequest) => Promise<CreateProjectResponse>;
 }
+
+// Re-export LS-only types (consumed by the extension's LS client; not part of MiDiagramAPI).
+export type {
+    GetConnectorInfoRequest,
+    GetConnectorInfoResponse,
+    ConnectorInfo,
+    ConnectorAction,
+    ConnectorActionParameter,
+    GetInboundInfoRequest,
+    GetInboundInfoResponse,
+    InboundEndpointInfo,
+    InboundEndpointParameter,
+} from './types';

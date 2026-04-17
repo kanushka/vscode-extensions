@@ -31,6 +31,17 @@ export type ConnectorStoreItemType = 'connector' | 'inbound';
 export type ConnectorStoreSource = 'fresh-cache' | 'stale-cache' | 'store' | 'local-db';
 export type ConnectorStoreStatus = 'healthy' | 'degraded';
 
+const FULL_ARTIFACT_ID_PATTERN = /^(mi-(connector|module|inbound)|esb-connector)-/i;
+
+/**
+ * True when the id looks like a fully-qualified Maven artifact id
+ * (e.g. "mi-inbound-file"). Exact-match lookups are required for these —
+ * stripped matching would unify "mi-inbound-file" and "mi-connector-file".
+ */
+export function isFullArtifactId(identifier: string): boolean {
+    return FULL_ARTIFACT_ID_PATTERN.test(identifier);
+}
+
 export interface ConnectorStoreItem {
     connectorName: string;
     description: string;
@@ -359,15 +370,21 @@ async function loadCatalog(
 
 function matchesStoreItem(item: ConnectorStoreItem, name: string): boolean {
     const normalized = normalizeName(name);
-    const stripped = normalizeName(stripConnectorPrefix(name));
     if (normalized.length === 0) {
         return false;
     }
 
     const itemName = normalizeName(item.connectorName);
     const itemArtifact = normalizeName(item.mavenArtifactId);
-    const itemArtifactStripped = normalizeName(stripConnectorPrefix(item.mavenArtifactId));
 
+    if (isFullArtifactId(normalized)) {
+        return normalized === itemArtifact;
+    }
+
+    // Bare identifier ("file", "File") — fall back to loose matching so legacy
+    // callers that pass display names or un-prefixed ids still resolve.
+    const stripped = normalizeName(stripConnectorPrefix(name));
+    const itemArtifactStripped = normalizeName(stripConnectorPrefix(item.mavenArtifactId));
     return normalized === itemName
         || normalized === itemArtifact
         || normalized === itemArtifactStripped
@@ -484,16 +501,20 @@ export async function lookupConnectorFromCache(
     }
 
     // 4. Final fallback: static DB
+    const normalizedInput = normalizeName(name);
+    const fullId = isFullArtifactId(normalizedInput);
     const allFallback = [...fallbackConnectors, ...fallbackInbounds];
     const dbMatch = allFallback.find(item => {
-        const itemName = normalizeName(item?.connectorName);
         const itemArtifact = normalizeName(item?.mavenArtifactId);
+        if (fullId) {
+            return normalizedInput === itemArtifact;
+        }
+        const itemName = normalizeName(item?.connectorName);
         const itemArtifactStripped = normalizeName(stripConnectorPrefix(item?.mavenArtifactId));
-        const normalized = normalizeName(name);
         const stripped = normalizeName(stripConnectorPrefix(name));
-        return normalized === itemName
-            || normalized === itemArtifact
-            || normalized === itemArtifactStripped
+        return normalizedInput === itemName
+            || normalizedInput === itemArtifact
+            || normalizedInput === itemArtifactStripped
             || stripped === itemName
             || stripped === itemArtifact;
     });
