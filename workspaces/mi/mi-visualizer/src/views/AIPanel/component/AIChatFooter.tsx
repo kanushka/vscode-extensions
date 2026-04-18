@@ -492,16 +492,15 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
         clearWorkingOnItPlaceholder();
     }, [clearWorkingOnItPlaceholder, clearWorkingOnItTimer]);
 
+
     // Handle agent streaming events from extension
     // Uses refs for values that change between renders (assistantResponseRef, currentChatIdRef)
     // to avoid stale closure issues since this callback is registered once via onAgentEvent.
     const handleAgentEvent = useCallback((event: AgentEvent) => {
-        // Ignore all events if generation was aborted
-        if (abortedRef.current) {
-            return;
-        }
-
-        // Track sequence number and timestamp for polling fallback
+        // Track sequence number and timestamp for polling fallback. Do this
+        // even when events are being dropped by the abort guard below — the
+        // polling loop still needs to know a terminal event arrived so it can
+        // stop.
         if (ENABLE_STREAM_SAFEGUARDS) {
             if (event.seq !== undefined && event.seq > lastReceivedSeqRef.current) {
                 lastReceivedSeqRef.current = event.seq;
@@ -510,6 +509,14 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
             if (event.type === 'stop' || event.type === 'error' || event.type === 'abort') {
                 terminalEventReceivedRef.current = true;
             }
+        }
+
+        // Ignore all events if generation was aborted by the user. The UI has
+        // already been finalized optimistically in handleInterrupt; late
+        // streaming events (content, tool_call, tool_result, etc.) would only
+        // re-render content that's no longer relevant.
+        if (abortedRef.current) {
+            return;
         }
 
         switch (event.type) {
@@ -709,33 +716,11 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
                 break;
 
             case "abort":
-                // Abort acknowledged - finalize with partial content and "[Interrupted]" marker
-                clearWorkingOnItTimer();
-                clearWorkingOnItPlaceholder();
-                setBackendRequestTriggered(false);
-                setPendingQuestion(null);
-                clearPendingApprovals();
-                setShowRejectionInput(false);
-                setPlanRejectionFeedback("");
-                resetApprovalUiState();
-                setOtherAnswers(new Map());
-                setMessages((prevMessages) => {
-                    if (prevMessages.length === 0) return prevMessages;
-                    const newMessages = [...prevMessages];
-                    const lastIdx = newMessages.length - 1;
-                    const lastMessage = newMessages[lastIdx];
-                    if (lastMessage.role === Role.MICopilot) {
-                        let content = lastMessage.content.replace(/<toolcall data-loading="true"[^>]*>[^<]*<\/toolcall>/g, '');
-                        content = content.trim();
-                        content = content
-                            ? content + "\n\n*[Interrupted by user]*"
-                            : "*[Interrupted by user]*";
-                        newMessages[lastIdx] = { ...lastMessage, content };
-                    }
-                    return newMessages;
-                });
-                setAssistantResponse("");
-                setToolStatus("");
+                // Abort acknowledged by backend. When the user clicked Interrupt the
+                // UI has already been finalized optimistically; this branch covers
+                // backend-initiated aborts (watchdog, rpc-manager catch). The helper
+                // is idempotent so the double-path is safe.
+                finalizeInterruptionUi();
                 break;
 
             case "stop":
@@ -991,22 +976,28 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
         }
     };
 
-    const handleInterrupt = async () => {
+    const handleInterrupt = () => {
         if (!backendRequestTriggered) {
             return;
         }
-        // Close any pending approval/question dialogs immediately in UI.
-        setPendingQuestion(null);
-        clearPendingApprovals();
-        setShowRejectionInput(false);
-        setPlanRejectionFeedback("");
-        resetApprovalUiState();
-        setOtherAnswers(new Map());
-        try {
-            await rpcClient.getMiAgentPanelRpcClient().abortAgentGeneration();
-        } catch (error) {
-            console.error("Error interrupting generation:", error);
-        }
+        // Optimistic UI: flip button back to Send, drop late events, and append
+        // the "[Interrupted]" marker synchronously — no waiting on the backend.
+        // The 'abort' event handler below remains a safety net for backend-
+        // initiated aborts (watchdog timeout, etc.) and re-entry is idempotent.
+        abortedRef.current = true;
+        finalizeInterruptionUi();
+
+        // Fire-and-forget the abort RPC so the backend can tear down in
+        // parallel. Tools that honor mainAbortSignal (shell, maven build, web
+        // tools, subagents, etc.) will hard-kill; tools that don't will
+        // complete on their own schedule but their events are ignored by the
+        // abortedRef guard in handleAgentEvent.
+        rpcClient
+            .getMiAgentPanelRpcClient()
+            .abortAgentGeneration()
+            .catch((error) => {
+                console.error("Error interrupting generation:", error);
+            });
     };
 
 
@@ -1129,6 +1120,9 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
             return;
         }
 
+        // Lift the abort guard so events for THIS run aren't dropped by a prior
+        // interrupt. Must happen before any streaming state is set up.
+        abortedRef.current = false;
         sendInProgressRef.current = true;
         closeMentionSuggestions();
         // Clear input immediately so user can't send the same message again while compacting.
@@ -1476,6 +1470,51 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
         setShellFocusedOption(0);
         setAnswers(new Map());
     }, []);
+
+    // Shared finalizer for both user-clicked interrupts (optimistic, runs before
+    // the backend replies) and backend-initiated aborts (watchdog timeout,
+    // rpc-manager catch) delivered via the 'abort' event. Idempotent — safe to
+    // call multiple times; re-runs skip appending the marker if already present.
+    const finalizeInterruptionUi = useCallback(() => {
+        clearWorkingOnItTimer();
+        clearWorkingOnItPlaceholder();
+        setBackendRequestTriggered(false);
+        setPendingQuestion(null);
+        clearPendingApprovals();
+        setShowRejectionInput(false);
+        setPlanRejectionFeedback("");
+        resetApprovalUiState();
+        setOtherAnswers(new Map());
+        setMessages((prevMessages) => {
+            if (prevMessages.length === 0) return prevMessages;
+            const newMessages = [...prevMessages];
+            const lastIdx = newMessages.length - 1;
+            const lastMessage = newMessages[lastIdx];
+            if (lastMessage.role !== Role.MICopilot) {
+                return prevMessages;
+            }
+            let content = lastMessage.content.replace(/<toolcall data-loading="true"[^>]*>[^<]*<\/toolcall>/g, '');
+            content = content.trim();
+            if (content.endsWith("*[Interrupted by user]*")) {
+                return prevMessages;
+            }
+            content = content
+                ? content + "\n\n*[Interrupted by user]*"
+                : "*[Interrupted by user]*";
+            newMessages[lastIdx] = { ...lastMessage, content };
+            return newMessages;
+        });
+        setAssistantResponse("");
+        setToolStatus("");
+    }, [
+        clearPendingApprovals,
+        clearWorkingOnItPlaceholder,
+        clearWorkingOnItTimer,
+        resetApprovalUiState,
+        setBackendRequestTriggered,
+        setMessages,
+        setPendingQuestion,
+    ]);
 
     const handlePlanApprovalCancel = async () => {
         await handleQuestionCancel();

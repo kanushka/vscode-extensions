@@ -620,7 +620,7 @@ export function createAgentTools(params: CreateToolsParams) {
 
         // Project Tools (1 tool)
         [MANAGE_CONNECTOR_TOOL_NAME]: createManageConnectorTool(
-            getWrappedExecute(MANAGE_CONNECTOR_TOOL_NAME, createManageConnectorExecute(projectPath, undoCheckpointManager))
+            getWrappedExecute(MANAGE_CONNECTOR_TOOL_NAME, createManageConnectorExecute(projectPath, undoCheckpointManager, abortSignal))
         ),
 
         // LSP Tools (1 tool)
@@ -630,10 +630,10 @@ export function createAgentTools(params: CreateToolsParams) {
 
         // Data Mapper Tools (2 tools)
         [CREATE_DATA_MAPPER_TOOL_NAME]: createCreateDataMapperTool(
-            getWrappedExecute(CREATE_DATA_MAPPER_TOOL_NAME, createCreateDataMapperExecute(projectPath, modifiedFiles, undoCheckpointManager))
+            getWrappedExecute(CREATE_DATA_MAPPER_TOOL_NAME, createCreateDataMapperExecute(projectPath, modifiedFiles, undoCheckpointManager, abortSignal))
         ),
         [GENERATE_DATA_MAPPING_TOOL_NAME]: createGenerateDataMappingTool(
-            getWrappedExecute(GENERATE_DATA_MAPPING_TOOL_NAME, createGenerateDataMappingExecute(projectPath, modifiedFiles, undoCheckpointManager))
+            getWrappedExecute(GENERATE_DATA_MAPPING_TOOL_NAME, createGenerateDataMappingExecute(projectPath, modifiedFiles, undoCheckpointManager, abortSignal))
         ),
 
         // Runtime Tools (2 tools)
@@ -676,7 +676,8 @@ export function createAgentTools(params: CreateToolsParams) {
                 webAccessPreapproved,
                 sessionId,
                 mainModelId,
-                mainModelIsCustom
+                mainModelIsCustom,
+                abortSignal
             ))
         ),
         [WEB_FETCH_TOOL_NAME]: createWebFetchTool(
@@ -687,7 +688,8 @@ export function createAgentTools(params: CreateToolsParams) {
                 webAccessPreapproved,
                 sessionId,
                 mainModelId,
-                mainModelIsCustom
+                mainModelIsCustom,
+                abortSignal
             ))
         ),
         [DEEPWIKI_ASK_QUESTION_TOOL_NAME]: createDeepWikiTool(

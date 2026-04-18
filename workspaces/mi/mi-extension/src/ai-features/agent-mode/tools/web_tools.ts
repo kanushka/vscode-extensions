@@ -128,7 +128,8 @@ export function createWebSearchExecute(
     webAccessPreapproved: boolean,
     sessionId: string,
     mainModelId?: string,
-    mainModelIsCustom?: boolean
+    mainModelIsCustom?: boolean,
+    mainAbortSignal?: AbortSignal
 ): WebSearchExecuteFn {
     return async (args): Promise<ToolResult> => {
         const allowedDomains = sanitizeDomainList(args.allowed_domains);
@@ -178,6 +179,7 @@ export function createWebSearchExecute(
                 tools: {
                     web_search: webSearch,
                 },
+                abortSignal: mainAbortSignal,
             });
 
             const toolOutput = extractToolOutput(result);
@@ -221,7 +223,8 @@ export function createWebFetchExecute(
     webAccessPreapproved: boolean,
     sessionId: string,
     mainModelId?: string,
-    mainModelIsCustom?: boolean
+    mainModelIsCustom?: boolean,
+    mainAbortSignal?: AbortSignal
 ): WebFetchExecuteFn {
     return async (args): Promise<ToolResult> => {
         try {
@@ -285,6 +288,7 @@ export function createWebFetchExecute(
                 tools: {
                     web_fetch: webFetch,
                 },
+                abortSignal: mainAbortSignal,
             });
 
             const toolOutput = extractToolOutput(result);

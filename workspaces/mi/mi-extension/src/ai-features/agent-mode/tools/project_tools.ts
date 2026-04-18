@@ -25,6 +25,7 @@ import { DependencyDetails } from '@wso2/mi-core';
 import { logDebug, logError } from '../../copilot/logger';
 import { AgentUndoCheckpointManager } from '../undo/checkpoint-manager';
 import { lookupConnectorFromCache } from './connector_store_cache';
+import { ensureOperationNotAborted } from './abort-utils';
 import { CONNECTOR_DB } from '../context/connectors/connector_db';
 import { INBOUND_DB } from '../context/connectors/inbound_db';
 import {
@@ -109,7 +110,8 @@ interface ExistingDependencies {
  */
 export function createManageConnectorExecute(
     projectPath: string,
-    undoCheckpointManager?: AgentUndoCheckpointManager
+    undoCheckpointManager?: AgentUndoCheckpointManager,
+    mainAbortSignal?: AbortSignal
 ): ManageConnectorExecuteFn {
     return async (args: {
         operation: 'add' | 'remove';
@@ -133,12 +135,14 @@ export function createManageConnectorExecute(
         logDebug(`[${toolName}] ${isAdd ? 'Adding' : 'Removing'} connectors: [${connector_artifact_ids.join(', ')}], inbounds: [${inbound_artifact_ids.join(', ')}]`);
 
         try {
+            ensureOperationNotAborted(mainAbortSignal, 'starting connector operation');
             const miVisualizerRpcManager = new MiVisualizerRpcManager(projectPath);
             await undoCheckpointManager?.captureBeforeChange('pom.xml');
 
             // For add operation, get existing dependencies to check for duplicates
             let existingDependencies: ExistingDependencies = { connectorDependencies: [], otherDependencies: [] };
             if (isAdd) {
+                ensureOperationNotAborted(mainAbortSignal, 'loading existing dependencies');
                 const langClient = await MILanguageClient.getInstance(projectPath);
                 const projectDetails = await langClient.getProjectDetails();
                 existingDependencies = projectDetails.dependencies || { connectorDependencies: [], otherDependencies: [] };
@@ -152,6 +156,7 @@ export function createManageConnectorExecute(
             ];
 
             for (const { id: itemId, type: itemType } of allIds) {
+                ensureOperationNotAborted(mainAbortSignal, `processing ${itemType} ${itemId}`);
                 // Reject bundled inbound ids early — they can't be added to pom.xml.
                 if (itemType === 'inbound' && classifyIdentifier(itemId) === 'bundled-inbound') {
                     results.push({
@@ -190,6 +195,7 @@ export function createManageConnectorExecute(
 
             // Update connector dependencies (refresh connector list)
             try {
+                ensureOperationNotAborted(mainAbortSignal, 'refreshing connector dependencies');
                 await miVisualizerRpcManager.updateConnectorDependencies();
                 logDebug(`[${toolName}] Connector dependencies updated`);
             } catch (updateError) {
@@ -198,6 +204,7 @@ export function createManageConnectorExecute(
 
             // Reload dependencies after operation
             try {
+                ensureOperationNotAborted(mainAbortSignal, 'reloading dependencies');
                 await miVisualizerRpcManager.reloadDependencies();
                 logDebug(`[${toolName}] Dependencies reloaded successfully`);
             } catch (error) {

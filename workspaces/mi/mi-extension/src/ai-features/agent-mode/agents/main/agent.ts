@@ -222,7 +222,7 @@ function getStructuredErrorName(error: unknown): string | undefined {
     return typeof name === 'string' ? name : undefined;
 }
 
-function isToolInterruptionAbortError(error: unknown): boolean {
+export function isToolInterruptionAbortError(error: unknown): boolean {
     if (!error) {
         return false;
     }

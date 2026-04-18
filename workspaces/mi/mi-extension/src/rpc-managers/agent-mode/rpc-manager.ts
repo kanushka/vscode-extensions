@@ -55,6 +55,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { AgentEventHandler } from './event-handler';
 import { executeAgent, createAgentAbortController, AgentEvent } from '../../ai-features/agent-mode';
+import { isToolInterruptionAbortError } from '../../ai-features/agent-mode/agents/main/agent';
 import { logInfo, logError, logDebug } from '../../ai-features/copilot/logger';
 import {
     ChatHistoryManager,
@@ -904,6 +905,22 @@ export class MIAgentPanelRpcManager implements MIAgentPanelAPI {
                     logError('[AgentPanel] Failed to discard pending undo checkpoint run', discardError);
                 }
             }
+
+            // If the error escaped here due to a user interrupt (e.g. during the continuation-approval
+            // window, or pre-streamText setup), the main agent's catch in executeAgent never ran,
+            // so no 'abort' event was emitted and no interruption reminder was saved. Cover both here
+            // so the UI hides the Interrupt button via a terminal event and the model sees a
+            // system-reminder on the next turn.
+            if (isToolInterruptionAbortError(error)) {
+                try {
+                    const historyManager = await this.getChatHistoryManager();
+                    await historyManager.saveInterruptionMessage(false);
+                } catch (saveError) {
+                    logError('[AgentPanel] Failed to save interruption reminder in rpc-manager catch', saveError);
+                }
+                this.eventHandler.handleEvent({ type: 'abort' });
+            }
+
             return {
                 success: false,
                 checkpointId: activeCheckpointId,
