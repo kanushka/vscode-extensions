@@ -37,12 +37,16 @@ interface AICodeGeneratorProps {
  * Main chat component with integrated MICopilot Context provider
  */
 export function AICodeGenerator({ isUsageExceeded = false }: AICodeGeneratorProps) {
-  const { messages, pendingReview, rpcClient } = useMICopilotContext();
+  const { messages, pendingReview, rpcClient, backendRequestTriggered } = useMICopilotContext();
   const [isAtBottom, setIsAtBottom] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [isByok, setIsByok] = useState(false);
   const mainContainerRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  // Ignore scroll events produced by our own scrollIntoView so smooth-scroll
+  // animation ticks don't flip isAtBottom=false mid-stream and freeze the UI.
+  const programmaticScrollRef = useRef(false);
+  const programmaticScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Check BYOK status for settings panel
   useEffect(() => {
@@ -58,11 +62,31 @@ export function AICodeGenerator({ isUsageExceeded = false }: AICodeGeneratorProp
       checkByok();
   }, [rpcClient]);
 
+  const beginProgrammaticScroll = (durationMs: number) => {
+      programmaticScrollRef.current = true;
+      if (programmaticScrollTimerRef.current) {
+          clearTimeout(programmaticScrollTimerRef.current);
+      }
+      programmaticScrollTimerRef.current = setTimeout(() => {
+          programmaticScrollRef.current = false;
+          programmaticScrollTimerRef.current = null;
+      }, durationMs);
+  };
+
+  useEffect(() => {
+      return () => {
+          if (programmaticScrollTimerRef.current) {
+              clearTimeout(programmaticScrollTimerRef.current);
+          }
+      };
+  }, []);
+
   // Check if the chat is scrolled to the bottom
   useEffect(() => {
       const container = mainContainerRef.current;
       if (container) {
           const handleScroll = () => {
+              if (programmaticScrollRef.current) return;
               const { scrollTop, scrollHeight, clientHeight } = container;
               if (scrollHeight - scrollTop <= clientHeight + 50) {
                   setIsAtBottom(true);
@@ -71,19 +95,45 @@ export function AICodeGenerator({ isUsageExceeded = false }: AICodeGeneratorProp
               }
           };
 
-          container.addEventListener("scroll", handleScroll);
+          container.addEventListener("scroll", handleScroll, { passive: true });
           return () => {
               container.removeEventListener("scroll", handleScroll);
           };
       }
   }, []);
 
-  // Scroll to the bottom of the chat when new messages are added
+  // Scroll to the bottom of the chat when new messages are added.
+  // Use instant scroll while streaming to avoid the smooth-scroll race that
+  // otherwise lets rapid content growth flip isAtBottom=false mid-animation.
   useEffect(() => {
-      if (isAtBottom && messagesEndRef.current) {
-          messagesEndRef.current.scrollIntoView({ behavior: "smooth", block: "end" });
+      if (!isAtBottom || !messagesEndRef.current) return;
+      const behavior: ScrollBehavior = backendRequestTriggered ? "auto" : "smooth";
+      beginProgrammaticScroll(behavior === "smooth" ? 500 : 80);
+      messagesEndRef.current.scrollIntoView({ behavior, block: "end" });
+  }, [messages, pendingReview, isAtBottom, backendRequestTriggered]);
+
+  // Keep the viewport pinned to the bottom when async content (markdown,
+  // syntax-highlighted code blocks, thinking segments) grows the container
+  // without firing a scroll event.
+  useEffect(() => {
+      const container = mainContainerRef.current;
+      if (!container || !isAtBottom) return;
+      const ro = new ResizeObserver(() => {
+          if (!messagesEndRef.current) return;
+          beginProgrammaticScroll(80);
+          messagesEndRef.current.scrollIntoView({ block: "end" });
+      });
+      ro.observe(container);
+      return () => ro.disconnect();
+  }, [isAtBottom]);
+
+  const handleJumpToLatest = () => {
+      setIsAtBottom(true);
+      if (messagesEndRef.current) {
+          beginProgrammaticScroll(80);
+          messagesEndRef.current.scrollIntoView({ block: "end" });
       }
-  }, [messages, pendingReview, isAtBottom]);
+  };
 
   // Full-panel settings view
   if (showSettings) {
@@ -98,28 +148,57 @@ export function AICodeGenerator({ isUsageExceeded = false }: AICodeGeneratorProp
           <AIChatView>
               <AIChatHeader onOpenSettings={() => setShowSettings(true)} />
 
-              <main style={{ flex: 1, overflowY: "auto" }} ref={mainContainerRef}>
-                  {Array.isArray(messages) && messages.length === 0 && <WelcomeMessage />}
+              <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
+                  <main style={{ flex: 1, overflowY: "auto" }} ref={mainContainerRef}>
+                      {Array.isArray(messages) && messages.length === 0 && <WelcomeMessage />}
 
-                  {Array.isArray(messages) && messages.map((message, index) => {
-                      const checkpointId = message.role === Role.MIUser
-                          ? message.checkpointAnchorId
-                          : undefined;
+                      {Array.isArray(messages) && messages.map((message, index) => {
+                          const checkpointId = message.role === Role.MIUser
+                              ? message.checkpointAnchorId
+                              : undefined;
 
-                      return (
-                          <div key={`${typeof message.id === "number" ? message.id : "msg"}-${message.role}-${index}`} className="group/turn">
-                              {checkpointId && <CheckpointIndicator targetCheckpointId={checkpointId} />}
-                              <AIChatMessage
-                                  message={message}
-                                  index={index}
-                              />
-                          </div>
-                      );
-                  })}
+                          return (
+                              <div key={`${typeof message.id === "number" ? message.id : "msg"}-${message.role}-${index}`} className="group/turn">
+                                  {checkpointId && <CheckpointIndicator targetCheckpointId={checkpointId} />}
+                                  <AIChatMessage
+                                      message={message}
+                                      index={index}
+                                  />
+                              </div>
+                          );
+                      })}
 
-                  <FileChangesSegment />
-                  <div ref={messagesEndRef} />
-              </main>
+                      <FileChangesSegment />
+                      <div ref={messagesEndRef} />
+                  </main>
+
+                  {!isAtBottom && backendRequestTriggered && (
+                      <button
+                          onClick={handleJumpToLatest}
+                          title="Jump to latest"
+                          style={{
+                              position: "absolute",
+                              bottom: 12,
+                              right: 16,
+                              padding: "4px 10px",
+                              borderRadius: 12,
+                              background: "var(--vscode-button-background)",
+                              color: "var(--vscode-button-foreground)",
+                              border: "1px solid var(--vscode-button-border, transparent)",
+                              cursor: "pointer",
+                              fontSize: 11,
+                              boxShadow: "0 2px 8px rgba(0, 0, 0, 0.25)",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 4,
+                              zIndex: 10,
+                          }}
+                      >
+                          <span className="codicon codicon-arrow-down" style={{ fontSize: 12 }} />
+                          Jump to latest
+                      </button>
+                  )}
+              </div>
 
               <AIChatFooter isUsageExceeded={isUsageExceeded} />
           </AIChatView>
