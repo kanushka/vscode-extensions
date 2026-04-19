@@ -47,6 +47,60 @@ import {
 const NO_OUTPUT_SCHEMA_PLACEHOLDER = 'not available for this operation';
 
 // ============================================================================
+// Output schema flattener
+// ============================================================================
+
+function inferSchemaNodeType(node: any): string | null {
+    if (!node || typeof node !== 'object') return null;
+    if (typeof node.type === 'string') return node.type;
+    if (Array.isArray(node.type)) return node.type.join('|');
+    if (node.properties && typeof node.properties === 'object') return 'object';
+    if (node.items) return 'array';
+    return null;
+}
+
+function walkSchemaProperties(node: any, path: string, out: string[]): void {
+    if (!node || typeof node !== 'object') return;
+
+    if (path.length > 0) {
+        const desc = typeof node.description === 'string' ? node.description.trim() : '';
+        const type = inferSchemaNodeType(node);
+        if (desc && type) {
+            out.push(`${path} (${type}) — ${desc}`);
+        } else if (desc) {
+            out.push(`${path} — ${desc}`);
+        } else if (type) {
+            out.push(`${path} (${type})`);
+        }
+        // No description and no type → skip to avoid noise entries like `foo.bar`.
+    }
+
+    if (node.properties && typeof node.properties === 'object') {
+        for (const [key, sub] of Object.entries(node.properties)) {
+            const nextPath = path ? `${path}.${key}` : key;
+            walkSchemaProperties(sub, nextPath, out);
+        }
+    }
+    if (node.items && typeof node.items === 'object' && !Array.isArray(node.items)) {
+        walkSchemaProperties(node.items, `${path}[]`, out);
+    }
+}
+
+/**
+ * Flatten a JSON Schema (draft-07-ish) into a list of `path (type) — description`
+ * entries. Agents don't need the full schema envelope (`$schema`, `title`, etc.) —
+ * just the available field paths and their purpose.
+ *
+ * Returns null when the input isn't a walkable object or produces no entries.
+ */
+function flattenOutputSchema(schema: any): string[] | null {
+    if (!schema || typeof schema !== 'object') return null;
+    const out: string[] = [];
+    walkSchemaProperties(schema, '', out);
+    return out.length > 0 ? out : null;
+}
+
+// ============================================================================
 // Utility Functions
 // ============================================================================
 
@@ -259,7 +313,7 @@ async function buildLSOperationDetails(
         }
 
         // Try to read output schema. Three states:
-        //  1. action declares an outputSchemaPath AND the file reads + parses → use parsed JSON
+        //  1. action declares an outputSchemaPath AND the file reads + parses → flatten to `path (type) — description` lines
         //  2. action declares an outputSchemaPath BUT the file is missing/unreadable → warn (likely a bug), use placeholder
         //  3. action does NOT declare an outputSchemaPath → use placeholder (legacy/operation-style connectors)
         let outputSchema: any = NO_OUTPUT_SCHEMA_PLACEHOLDER;
@@ -269,7 +323,7 @@ async function buildLSOperationDetails(
                 action.name
             );
             if (parsed !== null) {
-                outputSchema = parsed;
+                outputSchema = flattenOutputSchema(parsed) ?? NO_OUTPUT_SCHEMA_PLACEHOLDER;
             } else {
                 logWarn(`[ConnectorTool] Output schema declared for '${name}.${action.name}' but could not be read at '${lsResult.outputSchemaPath}/${action.name}.json'`);
             }
@@ -857,7 +911,7 @@ const connectorInputSchema = z.object({
 export function createConnectorTool(execute: ConnectorExecuteFn) {
     return (tool as any)({
         description: `Info about MI connectors, downloadable inbound endpoints, and bundled inbound endpoints. The LS downloads + parses on demand.
-            In details output, each operation's outputSchema is either parsed JSON or the placeholder "${NO_OUTPUT_SCHEMA_PLACEHOLDER}" — do not retry.
+            In details output, each operation's outputSchema is a flat list of "path (type) — description" lines, or the placeholder "${NO_OUTPUT_SCHEMA_PLACEHOLDER}" — do not retry.
             Does NOT add the artifact to the project — use add_or_remove_connector for that.
             Call in parallel for multiple artifacts.`,
         inputSchema: connectorInputSchema,
