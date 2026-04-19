@@ -19,6 +19,7 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
@@ -176,7 +177,10 @@ function isPathWithin(basePath: string, targetPath: string): boolean {
 }
 
 function resolveFullPath(projectPath: string, filePath: string): string {
-    return path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(projectPath, filePath);
+    const expanded = /^~(?:[\\/]|$)/.test(filePath)
+        ? path.join(os.homedir(), filePath.slice(1))
+        : filePath;
+    return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(projectPath, expanded);
 }
 
 function isCopilotGlobalPath(fullPath: string): boolean {
@@ -189,8 +193,16 @@ function delay(ms: number): Promise<void> {
 
 /**
  * Validates path security rules that apply to all file tools.
+ *
+ * By default, paths must resolve inside the project or the copilot global dir.
+ * Pass `allowOutsideProject: true` for read-only callers (read/grep/glob) where
+ * reading arbitrary filesystem locations is acceptable; writes/edits must stay strict.
  */
-function validateFilePathSecurity(projectPath: string, filePath: string): ValidationResult {
+function validateFilePathSecurity(
+    projectPath: string,
+    filePath: string,
+    options: { allowOutsideProject?: boolean } = {}
+): ValidationResult {
     if (!filePath || typeof filePath !== 'string') {
         return {
             valid: false,
@@ -206,8 +218,17 @@ function validateFilePathSecurity(projectPath: string, filePath: string): Valida
         };
     }
 
-    // Security: prevent home shorthand and traversal in relative paths
-    if (/^~(?:[\\/]|$)/.test(normalizedPath) || (!path.isAbsolute(normalizedPath) && normalizedPath.includes('..'))) {
+    const allowOutside = options.allowOutsideProject === true;
+
+    // Security: prevent home shorthand (strict mode only) and traversal in relative paths.
+    // Read-only mode allows `~/...` expansion via resolveFullPath.
+    if (!allowOutside && /^~(?:[\\/]|$)/.test(normalizedPath)) {
+        return {
+            valid: false,
+            error: 'File path contains invalid traversal segments (.., leading ~).'
+        };
+    }
+    if (!path.isAbsolute(normalizedPath) && !/^~(?:[\\/]|$)/.test(normalizedPath) && normalizedPath.includes('..')) {
         return {
             valid: false,
             error: 'File path contains invalid traversal segments (.., leading ~).'
@@ -215,31 +236,33 @@ function validateFilePathSecurity(projectPath: string, filePath: string): Valida
     }
 
     const fullPath = resolveFullPath(projectPath, normalizedPath);
-    if (!isPathWithin(projectPath, fullPath) && !isCopilotGlobalPath(fullPath)) {
-        return {
-            valid: false,
-            error: 'File path must be within the project or ~/.wso2-mi/copilot/projects.'
-        };
-    }
 
-    // Symlink protection: resolve real path and re-check containment
-    try {
-        if (fs.existsSync(fullPath)) {
-            const realTarget = fs.realpathSync(fullPath);
-            const realProject = fs.realpathSync(projectPath);
-            if (!isPathWithin(realProject, realTarget) && !isCopilotGlobalPath(realTarget)) {
-                return {
-                    valid: false,
-                    error: 'File path resolves via symlink to a location outside the project.'
-                };
-            }
+    if (!allowOutside) {
+        if (!isPathWithin(projectPath, fullPath) && !isCopilotGlobalPath(fullPath)) {
+            return {
+                valid: false,
+                error: 'File path must be within the project or ~/.wso2-mi/copilot/projects.'
+            };
         }
-    } catch {
-        // realpath failure (e.g. broken symlink) — reject
-        return {
-            valid: false,
-            error: 'File path could not be resolved (broken symlink or permission error).'
-        };
+
+        // Symlink protection: resolve real path and re-check containment
+        try {
+            if (fs.existsSync(fullPath)) {
+                const realTarget = fs.realpathSync(fullPath);
+                const realProject = fs.realpathSync(projectPath);
+                if (!isPathWithin(realProject, realTarget) && !isCopilotGlobalPath(realTarget)) {
+                    return {
+                        valid: false,
+                        error: 'File path resolves via symlink to a location outside the project.'
+                    };
+                }
+            }
+        } catch {
+            return {
+                valid: false,
+                error: 'File path could not be resolved (broken symlink or permission error).'
+            };
+        }
     }
 
     return { valid: true };
@@ -267,9 +290,12 @@ function validateTextFilePath(projectPath: string, filePath: string): Validation
 
 /**
  * Validates file paths for read operations (text + multimodal).
+ *
+ * Reads are allowed outside the project — convenient for inspecting logs,
+ * connector JARs, or other files the agent needs to reason about.
  */
 function validateReadableFilePath(projectPath: string, filePath: string): ValidationResult {
-    const securityValidation = validateFilePathSecurity(projectPath, filePath);
+    const securityValidation = validateFilePathSecurity(projectPath, filePath, { allowOutsideProject: true });
     if (!securityValidation.valid) {
         return securityValidation;
     }
@@ -1055,7 +1081,7 @@ export function createGrepExecute(projectPath: string): GrepExecuteFn {
             }
         }
 
-        const pathValidation = validateFilePathSecurity(projectPath, searchPath);
+        const pathValidation = validateFilePathSecurity(projectPath, searchPath, { allowOutsideProject: true });
         if (!pathValidation.valid) {
             return {
                 success: false,
@@ -1243,7 +1269,7 @@ export function createGlobExecute(projectPath: string): GlobExecuteFn {
             };
         }
 
-        const pathValidation = validateFilePathSecurity(projectPath, searchPath);
+        const pathValidation = validateFilePathSecurity(projectPath, searchPath, { allowOutsideProject: true });
         if (!pathValidation.valid) {
             return {
                 success: false,
