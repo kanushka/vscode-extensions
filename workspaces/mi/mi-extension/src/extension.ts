@@ -33,7 +33,7 @@ import { isOldProjectOrWorkspace, getStateMachine } from './stateMachine';
 import { webviews } from './visualizer/webview';
 import { v4 as uuidv4 } from 'uuid';
 import path from 'path';
-import { COMMANDS } from './constants';
+import { COMMANDS, WI_EXTENSION_ID } from './constants';
 import { enableLS } from './util/workspace';
 import { disposeMIAgentPanelRpcManager } from './rpc-managers/agent-mode/rpc-handler';
 import { isConsolidatedProject } from './util/onboardingUtils';
@@ -126,9 +126,9 @@ export async function deactivate(): Promise<void> {
 }
 
 export function checkForDevantExt() {
-	const wso2PlatformExtension = extensions.getExtension('wso2.wso2-platform');
+	const wso2PlatformExtension = extensions.getExtension(WI_EXTENSION_ID);
 	if (!wso2PlatformExtension) {
-		vscode.window.showErrorMessage('The WSO2 Platform extension is not installed. Please install it to proceed.');
+		vscode.window.showErrorMessage('The WSO2 Integrator extension is not installed. Please install it to proceed.');
 		return false;
 	}
 	return true;

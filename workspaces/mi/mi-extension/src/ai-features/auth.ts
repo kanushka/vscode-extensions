@@ -36,10 +36,11 @@ import { createAmazonBedrock } from '@ai-sdk/amazon-bedrock';
 import { generateText } from 'ai';
 import { CommandIds as PlatformExtCommandIds, IWso2PlatformExtensionAPI } from '@wso2/wso2-platform-core';
 import { logInfo, logWarn, logError } from './copilot/logger';
+import { WI_EXTENSION_ID } from '../constants';
 
 export const TOKEN_NOT_AVAILABLE_ERROR_MESSAGE = 'Access token is not available.';
 export const STS_TOKEN_NOT_AVAILABLE_ERROR_MESSAGE = 'Failed to get STS token from platform extension';
-export const PLATFORM_EXTENSION_ID = 'wso2.wso2-platform';
+export const PLATFORM_EXTENSION_ID = WI_EXTENSION_ID;
 export const TOKEN_REFRESH_ONLY_SUPPORTED_FOR_MI_INTEL = 'Token refresh is only supported for MI Intelligence authentication';
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-haiku-4-5';
 
@@ -150,7 +151,7 @@ export const getPlatformExtensionAPI = async (): Promise<IWso2PlatformExtensionA
         if (!platformExt.isActive) {
             await platformExt.activate();
         }
-        return platformExt.exports as IWso2PlatformExtensionAPI;
+        return platformExt.exports?.cloudAPIs as IWso2PlatformExtensionAPI;
     } catch (error) {
         logError('Failed to activate platform extension', error);
         return undefined;

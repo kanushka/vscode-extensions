@@ -27,7 +27,7 @@ export const ENABLE_NATIVE_COMPACTION = true; // Set to true to enable Anthropic
 // Native compaction trigger threshold in tokens.
 // When input tokens exceed this value, the API auto-compacts the conversation.
 // Must be at least 50,000. Default Anthropic value is 150,000.
-const NATIVE_COMPACTION_TRIGGER_TOKENS = 180000;
+const NATIVE_COMPACTION_TRIGGER_TOKENS = 200000;
 
 import { ModelMessage, streamText, stepCountIs, UserModelMessage, SystemModelMessage, wrapLanguageModel } from 'ai';
 import { AnthropicProviderOptions } from '@ai-sdk/anthropic';
