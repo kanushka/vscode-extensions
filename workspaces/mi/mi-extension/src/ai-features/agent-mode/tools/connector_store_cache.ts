@@ -308,14 +308,15 @@ async function fetchCatalogFromStore(itemType: ConnectorStoreItemType, runtimeVe
 async function loadCatalog(
     itemType: ConnectorStoreItemType,
     runtimeVersion: string,
-    fallbackItems: any[]
+    fallbackItems: any[],
+    forceRefresh: boolean = false
 ): Promise<CatalogLoadResult> {
     const cachePath = buildCatalogFilePath(itemType, runtimeVersion);
     const cached = await readCatalogCache(cachePath);
     const label = itemType === 'connector' ? 'connectors' : 'inbound endpoints';
     const warnings: string[] = [];
 
-    if (cached && isEntryFresh(cached.fetchedAt)) {
+    if (!forceRefresh && cached && isEntryFresh(cached.fetchedAt)) {
         logDebug(`[ConnectorStoreCache] Using fresh ${label} cache (${cachePath})`);
         return {
             items: cached.data,
@@ -420,18 +421,20 @@ export async function getRuntimeVersionFromPom(projectPath: string): Promise<str
 export async function getConnectorStoreCatalog(
     projectPath: string,
     fallbackConnectors: any[],
-    fallbackInbounds: any[]
+    fallbackInbounds: any[],
+    options: { forceRefresh?: boolean } = {}
 ): Promise<ConnectorStoreCatalog> {
     const runtimeVersion = await getRuntimeVersionFromPom(projectPath);
     const runtimeVersionUsed = getRuntimeVersionUsed(runtimeVersion);
+    const forceRefresh = options.forceRefresh === true;
 
     if (runtimeVersion === null) {
         logInfo(`[ConnectorStoreCache] Runtime version unavailable. Defaulting connector store runtime to ${DEFAULT_RUNTIME_VERSION}.`);
     }
 
     const [connectorResult, inboundResult] = await Promise.all([
-        loadCatalog('connector', runtimeVersionUsed, fallbackConnectors),
-        loadCatalog('inbound', runtimeVersionUsed, fallbackInbounds),
+        loadCatalog('connector', runtimeVersionUsed, fallbackConnectors, forceRefresh),
+        loadCatalog('inbound', runtimeVersionUsed, fallbackInbounds, forceRefresh),
     ]);
 
     const warnings = dedupeWarnings([...connectorResult.warnings, ...inboundResult.warnings]);

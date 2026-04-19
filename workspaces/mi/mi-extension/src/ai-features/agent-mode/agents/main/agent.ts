@@ -1012,8 +1012,8 @@ export async function executeAgent(
                         displayInput = { file_path: toolInput?.file_path };
                     } else if (part.toolName === CONNECTOR_TOOL_NAME) {
                         displayInput = {
+                            mode: toolInput?.mode,
                             artifact_id: toolInput?.artifact_id,
-                            include_full_descriptions: toolInput?.include_full_descriptions,
                             operation_names: toolInput?.operation_names,
                             connection_names: toolInput?.connection_names,
                             parameter_names: toolInput?.parameter_names,

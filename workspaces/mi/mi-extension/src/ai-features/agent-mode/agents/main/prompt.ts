@@ -98,13 +98,13 @@ MI Runtime logs:
 </system-reminder>
 
 <system-reminder>
-Available WSO2 connector artifact ids (from the connector store — pass these to get_connector_info / add_or_remove_connector):
+Available WSO2 connector artifact ids for this version of the MI runtime (from the connector store — pass these to get_connector_info / add_or_remove_connector):
 {{available_connector_artifact_ids}}
 
-Available downloadable inbound artifact ids (from the connector store — add via add_or_remove_connector):
+Available downloadable inbound artifact ids for this version of the MI runtime (from the connector store — add via add_or_remove_connector):
 {{available_inbound_artifact_ids}}
 
-Available bundled inbound ids (shipped with the MI runtime — use the id directly with get_connector_info, do NOT add to pom.xml):
+Available bundled inbound ids (shipped with this version of the MI runtime — use the id directly with get_connector_info, do NOT add to pom.xml):
 {{available_bundled_inbound_ids}}
 </system-reminder>
 {{/if}}

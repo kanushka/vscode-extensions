@@ -74,9 +74,8 @@ function normalizeSelectionNames(names: unknown): string[] {
  * Derive initialization flags from LS connector result.
  */
 function deriveInitFlags(lsResult: LSConnectorResult): { connectionLocalEntryNeeded: boolean; noInitializationNeeded: boolean } {
-    const connectionTypes = Object.keys(lsResult.connectionUiSchema);
-    const noInitializationNeeded = connectionTypes.length === 0;
-    const hasInitAction = lsResult.actions.some(a => normalizeIdentifier(a.name) === 'init');
+    const noInitializationNeeded = lsResult.connections.length === 0;
+    const hasInitAction = lsResult.operations.some(a => normalizeIdentifier(a.name) === 'init');
     const connectionLocalEntryNeeded = noInitializationNeeded ? false : !hasInitAction;
     return { connectionLocalEntryNeeded, noInitializationNeeded };
 }
@@ -114,6 +113,19 @@ function findInStaticDB(name: string): any | null {
 }
 
 export type IdentifierKind = 'bundled-inbound' | 'maven-inbound' | 'connector';
+
+/**
+ * Tool modes:
+ *  - 'summary'   (default): high-level info — artifact id, version, init semantics,
+ *                operation names, connection type names, extracted path.
+ *  - 'details':   rich details for specific operation_names / connection_names
+ *                (connectors) or parameter_names (inbounds). At least one of those
+ *                arrays must be provided. Does NOT repeat summary fields.
+ *  - 'catalog': force-refresh the connector store catalog and return the
+ *                available artifact ids (connectors, downloadable inbounds, bundled
+ *                inbounds). No artifact_id required.
+ */
+export type ConnectorToolMode = 'summary' | 'details' | 'catalog';
 
 /**
  * Classify an identifier by shape. User-specified rule:
@@ -170,8 +182,8 @@ export function buildLSHighLevelSummary(
 ): string {
     const { connectionLocalEntryNeeded, noInitializationNeeded } = deriveInitFlags(lsResult);
 
-    const connectionTypes = Object.keys(lsResult.connectionUiSchema);
-    const visibleActions = lsResult.actions.filter(a => !a.isHidden);
+    const connectionTypes = lsResult.connections.map(c => c.name).filter(n => n.length > 0);
+    const visibleActions = lsResult.operations.filter(a => !a.isHidden);
 
     let message = buildInitModeReminder(name, lsResult);
 
@@ -213,6 +225,12 @@ export function buildLSHighLevelSummary(
         message += `- Operations: none available\n`;
     }
 
+    // Absolute path to the extracted connector — agents can file_read / grep
+    // uischemas and output schemas directly without needing a details call.
+    if (lsResult.extractedConnectorPath) {
+        message += `- Extracted: ${lsResult.extractedConnectorPath}\n`;
+    }
+
     return message;
 }
 
@@ -222,18 +240,16 @@ export function buildLSHighLevelSummary(
 async function buildLSOperationDetails(
     name: string,
     lsResult: LSConnectorResult,
-    dbEntry: any | null,
     requestedOperations: string[],
     requestedConnections: string[],
     warnings: Set<string>,
 ): Promise<Record<string, any> | null> {
-    const { connectionLocalEntryNeeded, noInitializationNeeded } = deriveInitFlags(lsResult);
     const selectedOperations: any[] = [];
-    const selectedConnections: string[] = [];
+    const selectedConnections: any[] = [];
 
     // Process requested operations
     for (const reqOp of requestedOperations) {
-        const action = lsResult.actions.find(
+        const action = lsResult.operations.find(
             a => normalizeIdentifier(a.name) === reqOp
         );
 
@@ -263,22 +279,25 @@ async function buildLSOperationDetails(
             name: action.name,
             description: action.description,
             supportsResponseModel: action.supportsResponseModel,
+            canActAsAgentTool: action.canActAsAgentTool,
             allowedConnectionTypes: action.allowedConnectionTypes,
             parameters: action.parameters.map(p => ({
                 name: p.name,
                 description: p.description,
                 required: p.required,
                 type: p.xsdType,
+                ...(p.defaultValue !== undefined ? { defaultValue: p.defaultValue } : {}),
             })),
             outputSchema,
+            ...(action.uiSchemaPath ? { uiSchemaPath: action.uiSchemaPath } : {}),
+            ...(action.outputSchemaPath ? { outputSchemaPath: action.outputSchemaPath } : {}),
         });
     }
 
-    // Process requested connections
-    const connectionTypes = Object.keys(lsResult.connectionUiSchema);
+    // Process requested connections — return full connection objects with parameters.
     for (const reqConn of requestedConnections) {
-        const match = connectionTypes.find(
-            ct => normalizeIdentifier(ct) === reqConn
+        const match = lsResult.connections.find(
+            c => normalizeIdentifier(c.name) === reqConn
         );
 
         if (!match) {
@@ -286,25 +305,35 @@ async function buildLSOperationDetails(
             continue;
         }
 
-        selectedConnections.push(match);
+        selectedConnections.push({
+            name: match.name,
+            displayName: match.displayName,
+            description: match.description,
+            uiSchemaPath: match.uiSchemaPath,
+            parameters: match.parameters.map(p => ({
+                name: p.name,
+                description: p.description,
+                required: p.required,
+                type: p.xsdType,
+                ...(p.defaultValue !== undefined ? { defaultValue: p.defaultValue } : {}),
+            })),
+        });
     }
 
     if (selectedOperations.length === 0 && selectedConnections.length === 0) {
         return null;
     }
 
-    const groupId = dbEntry?.mavenGroupId || lsResult.packageName || 'unknown';
-    const artifactIdVal = dbEntry?.mavenArtifactId || lsResult.artifactId || 'unknown';
-
-    return {
-        name: lsResult.displayName || name,
-        maven: `${groupId}:${artifactIdVal}`,
-        version: lsResult.version || 'unknown',
-        operations: selectedOperations,
-        connectionTypes: selectedConnections.length > 0 ? selectedConnections : connectionTypes,
-        connectionLocalEntryNeeded,
-        noInitializationNeeded,
-    };
+    // Slim payload: details mode assumes the summary was already shown, so we do NOT
+    // repeat name / maven / version / extractedConnectorPath / init flags here.
+    const payload: Record<string, any> = {};
+    if (selectedOperations.length > 0) {
+        payload.operations = selectedOperations;
+    }
+    if (selectedConnections.length > 0) {
+        payload.connections = selectedConnections;
+    }
+    return payload;
 }
 
 // ============================================================================
@@ -361,7 +390,6 @@ export function buildInboundSummary(
 function buildInboundDetails(
     identifier: string,
     ls: LSInboundResult,
-    dbEntry: any | null,
     requestedParams: string[],
     warnings: Set<string>,
 ): Record<string, any> | null {
@@ -384,11 +412,9 @@ function buildInboundDetails(
         }
     }
 
-    const payload: Record<string, any> = {
-        name: ls.displayName || ls.name || identifier,
-        id: ls.id,
-        source: ls.source,
-        type: ls.type,
+    // Slim payload: details mode assumes the summary was already shown, so we do NOT
+    // repeat name / id / source / type / maven here.
+    return {
         parameters: selected.map(p => ({
             name: p.name,
             description: p.description,
@@ -396,26 +422,22 @@ function buildInboundDetails(
             type: p.xsdType,
         })),
     };
-    if (ls.source === 'downloaded' && dbEntry?.mavenGroupId && dbEntry?.mavenArtifactId) {
-        payload.maven = `${dbEntry.mavenGroupId}:${dbEntry.mavenArtifactId}`;
-    }
-    return payload;
 }
 
 function renderInboundOutput(
     identifier: string,
     ls: LSInboundResult,
     dbEntry: any | null,
-    includeFullDescriptions: boolean,
+    mode: ConnectorToolMode,
     requestedParameters: string[],
     resolvedVersion: ResolvedVersion | undefined,
     warningSet: Set<string>,
 ): string {
     let message: string;
-    if (includeFullDescriptions) {
-        const detail = buildInboundDetails(identifier, ls, dbEntry, requestedParameters, warningSet);
+    if (mode === 'details') {
+        const detail = buildInboundDetails(identifier, ls, requestedParameters, warningSet);
         message = detail
-            ? `Selected Inbound Parameter Details:\n\`\`\`json\n${JSON.stringify(detail, null, 2)}\n\`\`\`\n`
+            ? `Inbound details:\n\`\`\`json\n${JSON.stringify(detail, null, 2)}\n\`\`\`\n`
             : '';
     } else {
         message = buildInboundSummary(identifier, ls, dbEntry, resolvedVersion);
@@ -524,13 +546,39 @@ export async function findDisplayNameForArtifactId(
 // ============================================================================
 
 export type ConnectorExecuteFn = (args: {
+    mode?: ConnectorToolMode;
     artifact_id?: string;
-    include_full_descriptions?: boolean;
     operation_names?: string[];
     connection_names?: string[];
     parameter_names?: string[];
     version?: string;
 }) => Promise<ToolResult>;
+
+// ============================================================================
+// Catalog mode renderer
+// ============================================================================
+
+async function renderCatalogOutput(projectPath: string): Promise<string> {
+    const [catalog, localInbound] = await Promise.all([
+        getConnectorStoreCatalog(projectPath, CONNECTOR_DB, INBOUND_DB, { forceRefresh: true }),
+        getLocalInboundCatalog(projectPath),
+    ]);
+    const connectorIds = toArtifactIds(catalog.connectors);
+    const inboundIds = toArtifactIds(catalog.inbounds);
+    const bundledIds = localInbound.bundled.map(b => b.id);
+
+    let message = `### Connector catalog (refreshed)\n`;
+    message += `- Runtime version used: ${catalog.runtimeVersionUsed}\n`;
+    message += `- Store status: ${catalog.storeStatus} (connectors=${catalog.source.connectors}, inbounds=${catalog.source.inbounds})\n`;
+    message += `- Connectors (${connectorIds.length}): ${connectorIds.join(', ') || 'none'}\n`;
+    message += `- Downloadable inbound endpoints (${inboundIds.length}): ${inboundIds.join(', ') || 'none'}\n`;
+    message += `- Bundled inbound ids (${bundledIds.length}): ${bundledIds.join(', ') || 'none'}\n`;
+
+    if (catalog.warnings.length > 0) {
+        message = `Warnings: ${catalog.warnings.join(' | ')}\n\n${message}`;
+    }
+    return message;
+}
 
 // ============================================================================
 // Execute Function
@@ -539,45 +587,55 @@ export type ConnectorExecuteFn = (args: {
 /**
  * Creates the execute function for get_connector_info tool.
  *
+ * Three modes:
+ *  - 'summary' (default): high-level info for a single artifact_id.
+ *  - 'details': rich details for specific operation_names / connection_names (connectors)
+ *              or parameter_names (inbounds). Requires at least one selection.
+ *  - 'catalog': force-refresh the connector store and return available ids.
+ *
  * Identifier is a Maven artifact id ("mi-connector-redis") or a bundled inbound id ("jms").
  * Classification picks one of three branches — see `classifyIdentifier`.
- *
- * Connector / maven-inbound flow:
- *   1. Store-cache / static-DB lookup by artifactId for maven coords + repoName + latest version
- *   2. Resolve target version via `resolveTargetVersion` (pom-or-latest default, override honored)
- *   3. Single LS call: `getConnectorInfoFromLS` OR `getInboundInfoFromLS(maven coords)` — LS handles download+parse
- *   4. Render: connector → `buildLSHighLevelSummary` + optional `buildLSOperationDetails`
- *              inbound   → `buildInboundSummary` + optional `buildInboundDetails`
- *
- * Bundled-inbound flow:
- *   1. Single LS call: `getInboundInfoFromLS({id})` — no download, no version
- *   2. Render via `buildInboundSummary` (source: "bundled")
- *   3. Ignore `version` override (with a warning).
  */
 export function createConnectorExecute(projectPath: string): ConnectorExecuteFn {
     return async (args: {
+        mode?: ConnectorToolMode;
         artifact_id?: string;
-        include_full_descriptions?: boolean;
         operation_names?: string[];
         connection_names?: string[];
         parameter_names?: string[];
         version?: string;
     }): Promise<ToolResult> => {
         const {
+            mode = 'summary',
             artifact_id,
-            include_full_descriptions = false,
             operation_names = [],
             connection_names = [],
             parameter_names = [],
             version,
         } = args;
 
+        // --- Catalog mode: no artifact_id required ---
+        if (mode === 'catalog') {
+            try {
+                const message = await renderCatalogOutput(projectPath);
+                logDebug(`[ConnectorTool] Catalog refreshed`);
+                return { success: true, message };
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                return {
+                    success: false,
+                    message: `Failed to refresh connector catalog: ${msg}`,
+                    error: `Error: ${msg}`,
+                };
+            }
+        }
+
         const requestedId = typeof artifact_id === 'string' ? artifact_id.trim() : '';
         if (requestedId.length === 0) {
             return {
                 success: false,
-                message: 'Provide artifact_id for a connector or inbound endpoint.',
-                error: 'Error: Missing artifact_id for get_connector_info'
+                message: `Provide artifact_id for mode='${mode}'.`,
+                error: `Error: Missing artifact_id for get_connector_info (mode='${mode}')`,
             };
         }
 
@@ -587,7 +645,29 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
         const warningSet = new Set<string>();
         const kind = classifyIdentifier(requestedId);
 
-        logInfo(`[ConnectorTool] artifact_id=${requestedId} kind=${kind} version_override=${version ?? '(default)'}`);
+        // --- Details mode hard requirement: at least one selection list. ---
+        if (mode === 'details') {
+            const needsOpsOrConns = kind === 'connector';
+            const needsParams = kind === 'bundled-inbound' || kind === 'maven-inbound';
+            const hasOpsOrConns = requestedOperations.length > 0 || requestedConnections.length > 0;
+            const hasParams = requestedParameters.length > 0;
+            if (needsOpsOrConns && !hasOpsOrConns) {
+                return {
+                    success: false,
+                    message: `mode='details' for connectors requires at least one of operation_names or connection_names.`,
+                    error: `Error: 'details' mode requires operation_names or connection_names for connectors`,
+                };
+            }
+            if (needsParams && !hasParams) {
+                return {
+                    success: false,
+                    message: `mode='details' for inbound endpoints requires parameter_names.`,
+                    error: `Error: 'details' mode requires parameter_names for inbound endpoints`,
+                };
+            }
+        }
+
+        logInfo(`[ConnectorTool] mode=${mode} artifact_id=${requestedId} kind=${kind} version_override=${version ?? '(default)'}`);
 
         // --- Bundled inbound branch: no cache lookup, no version resolution ---
         if (kind === 'bundled-inbound') {
@@ -611,7 +691,7 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
                 requestedId,
                 inboundRes,
                 null,
-                include_full_descriptions,
+                mode,
                 requestedParameters,
                 undefined,
                 warningSet,
@@ -632,7 +712,7 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
         if (!dbEntry) {
             return {
                 success: false,
-                message: `Artifact id '${requestedId}' was not found in the connector store or the local static catalog. Check the <AVAILABLE_*> lists in the system reminder for valid artifact ids.`,
+                message: `Artifact id '${requestedId}' was not found in the connector store or the local static catalog. Use mode='catalog' to refresh, or check the <AVAILABLE_*> lists in the system reminder.`,
                 error: `Error: Unknown artifact id '${requestedId}'`,
             };
         }
@@ -689,7 +769,7 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
                 requestedId,
                 inboundRes,
                 dbEntry,
-                include_full_descriptions,
+                mode,
                 requestedParameters,
                 resolvedVersion,
                 warningSet,
@@ -699,13 +779,6 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
         }
 
         // Connector branch
-        if (include_full_descriptions && requestedOperations.length === 0 && requestedConnections.length === 0) {
-            warningSet.add(
-                'include_full_descriptions=true but both operation_names and connection_names are empty. ' +
-                'Provide exact names to retrieve detailed parameter descriptions.'
-            );
-        }
-
         const connectorRes = await getConnectorInfoFromLS(projectPath, groupId, artifactId, resolvedVersion.version);
         if ('error' in connectorRes) {
             return {
@@ -715,23 +788,18 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
             };
         }
 
-        const wantsDeepDetails = include_full_descriptions
-            && (requestedOperations.length > 0 || requestedConnections.length > 0);
-
         let message: string;
-        if (wantsDeepDetails) {
-            message = buildInitModeReminder(requestedId, connectorRes);
+        if (mode === 'details') {
             const detailPayload = await buildLSOperationDetails(
                 requestedId,
                 connectorRes,
-                dbEntry,
                 requestedOperations,
                 requestedConnections,
                 warningSet,
             );
-            if (detailPayload) {
-                message += `\nSelected Operation Details:\n\`\`\`json\n${JSON.stringify(detailPayload, null, 2)}\n\`\`\`\n`;
-            }
+            message = detailPayload
+                ? `Connector details:\n\`\`\`json\n${JSON.stringify(detailPayload, null, 2)}\n\`\`\`\n`
+                : '';
         } else {
             message = buildLSHighLevelSummary(requestedId, connectorRes, dbEntry, resolvedVersion);
         }
@@ -741,7 +809,7 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
             message = `Warnings: ${warnings.join(' | ')}\n\n${message}`;
         }
 
-        logDebug(`[ConnectorTool] Retrieved connector: ${requestedId}@${resolvedVersion.version}`);
+        logDebug(`[ConnectorTool] Retrieved connector: ${requestedId}@${resolvedVersion.version} mode=${mode}`);
         return { success: true, message };
     };
 }
@@ -751,31 +819,36 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
 // ============================================================================
 
 const connectorInputSchema = z.object({
-    artifact_id: z.string()
-        .min(1)
-        .describe(
-            'Maven artifact id for a connector or downloadable inbound endpoint ' +
-            '(e.g. "mi-connector-redis", "mi-module-fhirbase", "mi-inbound-amazonsqs"), ' +
-            'OR a bundled inbound id (e.g. "http", "jms", "rabbitmq", "mqtt", "hl7"). ' +
-            'Classification by shape: single-word (no hyphen) → bundled inbound; contains "inbound" → downloadable inbound; otherwise → connector. ' +
-            'Pull ids from the <AVAILABLE_*> lists in the system reminder.'
-        ),
-    include_full_descriptions: z.boolean()
+    mode: z.enum(['summary', 'details', 'catalog'])
         .optional()
-        .default(false)
-        .describe('When true, returns deep details. For connectors: parameter xsdType, required, allowedConnectionTypes, outputSchema for the selected operation_names / connection_names. For inbound endpoints: parameter details for the selected parameter_names. The summary is NOT re-printed in this mode — you only get an init-mode reminder (connectors) or the details JSON.'),
+        .default('summary')
+        .describe(
+            "Tool mode. 'summary' (default): high-level info for one artifact_id — operations, connection type names, init flags, extracted path. " +
+            "'details': rich details for selected operation_names / connection_names (connectors) or parameter_names (inbounds); requires at least one of those. " +
+            "Does NOT repeat summary fields — call 'summary' first. " +
+            "'catalog': force-refresh the connector store and list available artifact ids; artifact_id and the *_names are ignored. Use when the <AVAILABLE_*> reminder looks stale."
+        ),
+    artifact_id: z.string()
+        .optional()
+        .describe(
+            "Maven artifact id for a connector or downloadable inbound endpoint " +
+            "(e.g. \"mi-connector-redis\",\"esb-connector-salesforce\", \"mi-module-fhirbase\", \"mi-inbound-amazonsqs\"), " +
+            "OR a bundled inbound id (e.g. \"http\", \"jms\", \"rabbitmq\", \"mqtt\", \"hl7\"). " +
+            "Classification by shape: single-word (no hyphen) → bundled inbound; contains \"inbound\" → downloadable inbound; otherwise → connector. " +
+            "Pull ids from the <AVAILABLE_*> reminder."
+        ),
     operation_names: z.array(z.string())
         .optional()
-        .describe('Connectors only. Operation names for targeted detailed output when include_full_descriptions=true. Example: ["sendMail","readMail"].'),
+        .describe("Connectors + mode='details'. Operation names to deeply describe — returns xsdType/required/allowedConnectionTypes/outputSchema plus uiSchemaPath and outputSchemaPath per op. Example: [\"sendMail\",\"readMail\"]."),
     connection_names: z.array(z.string())
         .optional()
-        .describe('Connectors only. Connection type names for targeted detailed output when include_full_descriptions=true. Example: ["GMAIL_CONNECTION"].'),
+        .describe("Connectors + mode='details'. Connection type names to deeply describe — returns each connection's parameters (name/description/required/xsdType/defaultValue) and uiSchemaPath. Example: [\"GMAIL_CONNECTION\"]."),
     parameter_names: z.array(z.string())
         .optional()
-        .describe('Inbound endpoints only. Parameter names for targeted detailed output when include_full_descriptions=true. Omit to get all parameters.'),
+        .describe("Inbound endpoints (bundled or downloadable) + mode='details'. Parameter names to deeply describe. Example: [\"destination\",\"accessKey\"]."),
     version: z.string()
         .optional()
-        .describe('Optional version selector. Accepts a concrete version string (e.g. "3.1.6"), the literal "latest" (force the store-cache latest), or "pom" (force the version currently declared in the project pom.xml — errors if the artifact is not in pom). When omitted, defaults to "pom if declared, else latest". Bundled inbound endpoints ignore this field (they have no version). The chosen version and its source appear in the response under "Version source".'),
+        .describe("Optional version selector for summary/details. Accepts a concrete version string (e.g. \"3.1.6\"), the literal \"latest\" (force the store-cache latest), or \"pom\" (force the version currently declared in the project pom.xml — errors if the artifact is not in pom). When omitted, defaults to \"pom if declared, else latest\". Bundled inbound endpoints ignore this field (they have no version)."),
 });
 
 /**
@@ -783,14 +856,10 @@ const connectorInputSchema = z.object({
  */
 export function createConnectorTool(execute: ConnectorExecuteFn) {
     return (tool as any)({
-        description: `Retrieves info for one MI connector, downloadable inbound endpoint, or bundled inbound endpoint by its artifact_id.
-            Identifier classification by shape: single-word "http"/"jms" → bundled inbound (no download); "mi-inbound-*" → downloadable inbound from Maven; everything else ("mi-connector-*", "mi-module-*") → connector.
-            The LS downloads + parses on demand — one call returns everything. Default output is a high-level summary (operations/parameters, version source, init flags for connectors).
-            Set include_full_descriptions=true with specific operation_names/connection_names (connectors) or parameter_names (inbounds) to get deep details. In that mode the summary header is NOT re-printed — call without include_full_descriptions first if you need the full summary.
-            Use 'version' to pin a specific version, force "latest" from the store, or force "pom" (the version in pom.xml). Default: pom version if declared, else latest. Bundled inbound endpoints have no version — the field is ignored with a warning.
-            Connector output schema for each operation is either parsed JSON or the placeholder string "${NO_OUTPUT_SCHEMA_PLACEHOLDER}" — do not retry hoping for a different result.
+        description: `Info about MI connectors, downloadable inbound endpoints, and bundled inbound endpoints. The LS downloads + parses on demand.
+            In details output, each operation's outputSchema is either parsed JSON or the placeholder "${NO_OUTPUT_SCHEMA_PLACEHOLDER}" — do not retry.
             Does NOT add the artifact to the project — use add_or_remove_connector for that.
-            Call this tool in parallel for multiple artifacts.`,
+            Call in parallel for multiple artifacts.`,
         inputSchema: connectorInputSchema,
         execute
     });

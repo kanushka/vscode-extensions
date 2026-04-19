@@ -25,7 +25,23 @@ import { logDebug, logWarn } from '../../copilot/logger';
 // Types — connector path
 // ============================================================================
 
-export interface LSConnectorAction {
+export interface LSConnectorParameter {
+    name: string;
+    description: string;
+    required: boolean;
+    xsdType: string;
+    defaultValue?: string;
+}
+
+export interface LSConnectorConnection {
+    name: string;              // e.g. "REDIS" — matches allowedConnectionTypes on actions
+    displayName: string;
+    description: string;
+    uiSchemaPath: string;      // absolute path to the connection's uischema JSON file
+    parameters: LSConnectorParameter[];
+}
+
+export interface LSConnectorOperation {
     name: string;
     tag: string;
     displayName: string;
@@ -34,12 +50,8 @@ export interface LSConnectorAction {
     supportsResponseModel: boolean;
     canActAsAgentTool: boolean;
     allowedConnectionTypes: string[];
-    parameters: Array<{
-        name: string;
-        description: string;
-        required: boolean;
-        xsdType: string;
-    }>;
+    parameters: LSConnectorParameter[];
+    uiSchemaPath?: string;
     outputSchemaPath?: string;
 }
 
@@ -49,10 +61,13 @@ export interface LSConnectorResult {
     artifactId: string;
     version: string;
     packageName: string;
-    uiSchemaPath: string;
-    outputSchemaPath: string;   // connector-level directory for per-action <name>.json files
-    connectionUiSchema: Record<string, string>;
-    actions: LSConnectorAction[];
+    extractedConnectorPath: string;  // absolute extracted folder
+    connectorZipPath: string;        // absolute downloaded zip
+    uiSchemaPath: string;            // connector-level uischema directory
+    outputSchemaPath: string;        // connector-level directory for per-operation <name>.json files
+    ballerinaModulePath: string;
+    connections: LSConnectorConnection[];
+    operations: LSConnectorOperation[];
 }
 
 // ============================================================================
@@ -96,7 +111,27 @@ export interface LocalInboundCatalog {
 // Internal mapping helpers
 // ============================================================================
 
-function mapAction(raw: any): LSConnectorAction {
+function mapParameter(p: any): LSConnectorParameter {
+    return {
+        name: typeof p?.name === 'string' ? p.name : '',
+        description: typeof p?.description === 'string' ? p.description : '',
+        required: p?.required === true,
+        xsdType: typeof p?.xsdType === 'string' ? p.xsdType : 'xs:string',
+        defaultValue: typeof p?.defaultValue === 'string' ? p.defaultValue : undefined,
+    };
+}
+
+function mapConnection(raw: any): LSConnectorConnection {
+    return {
+        name: typeof raw?.name === 'string' ? raw.name : '',
+        displayName: typeof raw?.displayName === 'string' ? raw.displayName : '',
+        description: typeof raw?.description === 'string' ? raw.description : '',
+        uiSchemaPath: typeof raw?.uiSchemaPath === 'string' ? raw.uiSchemaPath : '',
+        parameters: Array.isArray(raw?.parameters) ? raw.parameters.map(mapParameter) : [],
+    };
+}
+
+function mapOperation(raw: any): LSConnectorOperation {
     // LS uses `isHidden` on the wire (old spec also had `hidden`). Accept either.
     const hidden = raw?.isHidden === true || raw?.hidden === true;
     return {
@@ -108,14 +143,8 @@ function mapAction(raw: any): LSConnectorAction {
         supportsResponseModel: raw?.supportsResponseModel === true,
         canActAsAgentTool: raw?.canActAsAgentTool !== false, // defaults to true
         allowedConnectionTypes: Array.isArray(raw?.allowedConnectionTypes) ? raw.allowedConnectionTypes : [],
-        parameters: Array.isArray(raw?.parameters)
-            ? raw.parameters.map((p: any) => ({
-                name: typeof p?.name === 'string' ? p.name : '',
-                description: typeof p?.description === 'string' ? p.description : '',
-                required: p?.required === true,
-                xsdType: typeof p?.xsdType === 'string' ? p.xsdType : 'xs:string',
-            }))
-            : [],
+        parameters: Array.isArray(raw?.parameters) ? raw.parameters.map(mapParameter) : [],
+        uiSchemaPath: typeof raw?.uiSchemaPath === 'string' ? raw.uiSchemaPath : undefined,
         outputSchemaPath: typeof raw?.outputSchemaPath === 'string' ? raw.outputSchemaPath : undefined,
     };
 }
@@ -130,12 +159,13 @@ function mapConnectorResult(raw: any): LSConnectorResult | null {
         artifactId: typeof raw.artifactId === 'string' ? raw.artifactId : '',
         version: typeof raw.version === 'string' ? raw.version : '',
         packageName: typeof raw.packageName === 'string' ? raw.packageName : '',
+        extractedConnectorPath: typeof raw.extractedConnectorPath === 'string' ? raw.extractedConnectorPath : '',
+        connectorZipPath: typeof raw.connectorZipPath === 'string' ? raw.connectorZipPath : '',
         uiSchemaPath: typeof raw.uiSchemaPath === 'string' ? raw.uiSchemaPath : '',
         outputSchemaPath: typeof raw.outputSchemaPath === 'string' ? raw.outputSchemaPath : '',
-        connectionUiSchema: (raw.connectionUiSchema && typeof raw.connectionUiSchema === 'object')
-            ? raw.connectionUiSchema as Record<string, string>
-            : {},
-        actions: Array.isArray(raw.actions) ? raw.actions.map(mapAction) : [],
+        ballerinaModulePath: typeof raw.ballerinaModulePath === 'string' ? raw.ballerinaModulePath : '',
+        connections: Array.isArray(raw.connections) ? raw.connections.map(mapConnection) : [],
+        operations: Array.isArray(raw.operations) ? raw.operations.map(mapOperation) : [],
     };
 }
 

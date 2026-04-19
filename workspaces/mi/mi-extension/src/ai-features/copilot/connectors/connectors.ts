@@ -133,25 +133,25 @@ async function enrichWithLSData(definition: any, name: string, projectPath?: str
         // Merge LS operation data into the definition
         const operations = enriched.version?.operations || enriched.operations || [];
         for (const op of operations) {
-            const lsAction = lsResult.actions.find(a =>
+            const lsOperation = lsResult.operations.find(a =>
                 a.name.toLowerCase() === (op.name || '').toLowerCase()
             );
-            if (lsAction) {
+            if (lsOperation) {
                 // Replace parameters with LS versions (has xsdType)
-                op.parameters = lsAction.parameters.map(p => ({
+                op.parameters = lsOperation.parameters.map(p => ({
                     name: p.name,
                     type: p.xsdType,
                     required: p.required,
                     description: p.description,
-                    defaultValue: '',
+                    defaultValue: p.defaultValue ?? '',
                 }));
                 // Add LS-only fields
-                op.allowedConnectionTypes = lsAction.allowedConnectionTypes;
-                op.supportsResponseModel = lsAction.supportsResponseModel;
+                op.allowedConnectionTypes = lsOperation.allowedConnectionTypes;
+                op.supportsResponseModel = lsOperation.supportsResponseModel;
             }
         }
 
-        logInfo(`Enriched connector '${name}' with LS data (${lsResult.actions.length} actions)`);
+        logInfo(`Enriched connector '${name}' with LS data (${lsResult.operations.length} operations)`);
         return enriched;
     } catch (error) {
         logWarn(`Failed to enrich connector '${name}' with LS data: ${error instanceof Error ? error.message : String(error)}`);
