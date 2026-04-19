@@ -69,7 +69,9 @@ export function getStatusText(status: number) {
 
 export function splitHalfGeneratedCode(content: string) {
         const segments = [];
-        const regex = /```([\s\S]*?)$/g;
+        // Opening ``` must start a line (or start of string) so nested backticks
+        // inside JSON strings aren't mistaken for an unclosed fence during streaming.
+        const regex = /(?:^|\r?\n)```([\s\S]*?)$/g;
         let match;
         let lastIndex = 0;
 
@@ -110,8 +112,10 @@ export function splitContent(content: string): ContentSegment[] {
     const segments: ContentSegment[] = [];
     let match;
     // Updated regex to include <toolcall>, <todolist>, <bashoutput>, <compact>, <filechanges>, <plan>, and <thinking> tags.
-    // Code block regex matches any language (or no language) followed by a newline
-    const regex = /```(\w*)\n([\s\S]*?)```|<toolcall([^>]*)>([^<]*?)<\/toolcall>|<todolist>([\s\S]*?)<\/todolist>|<bashoutput(?:\s+[^>]*)?>([\s\S]*?)<\/bashoutput>|<compact>([\s\S]*?)<\/compact>|<filechanges>([\s\S]*?)<\/filechanges>|<plan>([\s\S]*?)<\/plan>|<thinking(?:\s+[^>]*)?>([\s\S]*?)<\/thinking>/g;
+    // Code block regex matches any language (or no language) followed by a newline.
+    // Closing ``` must start a line (preceded by newline, or be at start of string)
+    // so nested backticks inside JSON strings (e.g. tool outputs) don't prematurely close the block.
+    const regex = /```(\w*)\n([\s\S]*?)(?:\r?\n|^)```(?=\r?\n|$)|<toolcall([^>]*)>([^<]*?)<\/toolcall>|<todolist>([\s\S]*?)<\/todolist>|<bashoutput(?:\s+[^>]*)?>([\s\S]*?)<\/bashoutput>|<compact>([\s\S]*?)<\/compact>|<filechanges>([\s\S]*?)<\/filechanges>|<plan>([\s\S]*?)<\/plan>|<thinking(?:\s+[^>]*)?>([\s\S]*?)<\/thinking>/g;
     let start = 0;
 
     // Helper function to mark the last toolcall segment as complete
