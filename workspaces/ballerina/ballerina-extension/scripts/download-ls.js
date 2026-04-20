@@ -192,7 +192,14 @@ async function getLatestRelease(usePrerelease) {
         }
     }
 
-    const effectivePrerelease = (requestedTag === 'prerelease') || usePrerelease;
+    const effectivePrerelease = requestedTag
+        ? requestedTag === 'prerelease'
+        : usePrerelease;
+    
+    // Warn if env var conflicts with explicit --tag argument
+    if (requestedTag && requestedTag !== 'prerelease' && usePrerelease) {
+        console.warn(`Warning: --tag ${requestedTag} specified but isPreRelease=true in environment. Using --tag value.`);
+    }
 
     if (effectivePrerelease) {
         // Get all releases and find the latest prerelease
@@ -234,8 +241,10 @@ async function getLatestRelease(usePrerelease) {
 
 async function main() {
     try {
-        if (requestedTag && requestedTag !== 'latest' && requestedTag !== 'prerelease' && usePrerelease) {
-            throw new Error('Use either --prerelease or --tag <specific-tag>, not both');
+        // If an explicit --tag was provided, it takes precedence (validation happens in effectivePrerelease logic above)
+        if (!requestedTag && usePrerelease) {
+            // No explicit tag, falling back to isPreRelease env var
+            console.log('Using isPreRelease env var');
         }
 
         if (tagIndex >= 0 && !requestedTag) {
