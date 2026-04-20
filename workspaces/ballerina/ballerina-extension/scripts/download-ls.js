@@ -258,8 +258,11 @@ async function main() {
             return tag.startsWith('v') ? tag.slice(1) : tag;
         }
 
-        if (!forceReplace && checkExistingJar(getExpectedVersion(requestedTag))) {
-            process.exit(0);
+        // For concrete tags, check if the version already exists before fetching release info
+        if (!forceReplace && requestedTag && requestedTag !== 'latest' && requestedTag !== 'prerelease') {
+            if (checkExistingJar(getExpectedVersion(requestedTag))) {
+                process.exit(0);
+            }
         }
 
         const releaseLabel = requestedTag
@@ -278,6 +281,16 @@ async function main() {
 
         console.log('Fetching release information...');
         const releaseData = await getLatestRelease(usePrerelease);
+
+        // For floating tags, check if the concrete version already exists
+        if (!forceReplace && (!requestedTag || requestedTag === 'latest' || requestedTag === 'prerelease')) {
+            const concreteVersion = releaseData.tag_name.startsWith('v') 
+                ? releaseData.tag_name.slice(1) 
+                : releaseData.tag_name;
+            if (checkExistingJar(concreteVersion)) {
+                process.exit(0);
+            }
+        }
 
         const jarAsset = releaseData.assets?.find(asset =>
             asset.name.includes('ballerina-language-server-') &&
