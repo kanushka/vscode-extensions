@@ -282,6 +282,10 @@ async function main() {
         console.log('Fetching release information...');
         const releaseData = await getLatestRelease(usePrerelease);
 
+        if (!releaseData?.tag_name) {
+            throw new Error('Invalid release data: missing tag_name');
+        }
+
         // For floating tags, check if the concrete version already exists
         if (!forceReplace && (!requestedTag || requestedTag === 'latest' || requestedTag === 'prerelease')) {
             const concreteVersion = releaseData.tag_name.startsWith('v') 
@@ -320,6 +324,14 @@ async function main() {
                 const relativePath = path.relative(PROJECT_ROOT, lsJarPath);
                 console.log(`Successfully downloaded Ballerina language server to ${relativePath}`);
                 console.log(`File size: ${fileSize} bytes`);
+                // Remove any stale JARs that aren't the newly downloaded one
+                const staleJars = fs.readdirSync(LS_DIR).filter(f =>
+                    f.includes('ballerina-language-server-') && f.endsWith('.jar') && f !== jarAsset.name
+                );
+                for (const stale of staleJars) {
+                    console.log(`Removing stale language server JAR: ${stale}`);
+                    fs.unlinkSync(path.join(LS_DIR, stale));
+                }
             } else {
                 throw new Error('Downloaded file is empty');
             }
