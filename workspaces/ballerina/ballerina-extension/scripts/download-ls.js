@@ -213,12 +213,21 @@ async function getLatestRelease(usePrerelease) {
         }
         return prerelease;
     } else {
-        // Get the latest stable release
-        const releaseResponse = await httpsRequest(`${GITHUB_REPO_URL}/releases/latest`);
+        // Get the latest stable release; fall back to newest release if none is marked stable
         try {
+            const releaseResponse = await httpsRequest(`${GITHUB_REPO_URL}/releases/latest`);
             return JSON.parse(releaseResponse.data);
         } catch (error) {
-            throw new Error('Failed to parse release information JSON');
+            if (error.message.includes('404')) {
+                console.log('No stable release found, fetching the most recent release...');
+                const releasesResponse = await httpsRequest(`${GITHUB_REPO_URL}/releases?per_page=1`);
+                const releases = JSON.parse(releasesResponse.data);
+                if (!releases.length) {
+                    throw new Error('No releases found in the repository');
+                }
+                return releases[0];
+            }
+            throw error;
         }
     }
 }
