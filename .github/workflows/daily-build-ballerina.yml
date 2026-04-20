@@ -51,12 +51,16 @@ jobs:
           LS_PROPS="workspaces/ballerina/ballerina-extension/ls-version.properties"
           if [ -f "$LS_PROPS" ]; then
             TAG=$(grep '^ls\.tag=' "$LS_PROPS" | cut -d'=' -f2 | tr -d '[:space:]')
-            echo "tag=$TAG" >> $GITHUB_OUTPUT
             echo "Using LS tag from ls-version.properties: $TAG"
           else
-            echo "tag=latest" >> $GITHUB_OUTPUT
+            TAG="latest"
             echo "ls-version.properties not found, defaulting to latest"
           fi
+          if [ -z "$TAG" ]; then
+            echo "::error::ls.tag is empty in ls-version.properties. Please set a valid tag (e.g., latest, prerelease, or v1.8.0.m1)."
+            exit 1
+          fi
+          echo "tag=$TAG" >> $GITHUB_OUTPUT
 
       - name: Download Ballerina LS
         run: pnpm --dir workspaces/ballerina/ballerina-extension run download-ls -- --tag "${{ steps.ls-version.outputs.tag }}" --replace
