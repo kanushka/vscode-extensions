@@ -449,13 +449,15 @@ export async function executeAgent(
         const memoryEnabled = request.memoryEnabled ?? ENABLE_MEMORY_TOOL;
 
         // System message (cache control will be added dynamically by prepareStep)
-        // Adding a cache block here because tools + system would be same for all users who use our proxy
+        // Adding a cache block here because tools + system would be same for all users who use our proxy.
+        // 1h TTL: system prompt is stable per-session; via proxy it's cross-user-warm (shared org),
+        // and for own-key users it survives idle/thinking gaps >5m. Cache write costs 2× base (vs 1.25× for 5m).
         const systemMessage: SystemModelMessage = {
             role: 'system',
             content: systemPromptSelection.prompt,
             providerOptions: {
                 anthropic: {
-                    cacheControl: { type: 'ephemeral' }
+                    cacheControl: { type: 'ephemeral', ttl: '1h' }
                 }
             }
         } as SystemModelMessage;

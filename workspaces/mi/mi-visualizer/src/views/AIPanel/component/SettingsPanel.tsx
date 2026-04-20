@@ -39,6 +39,11 @@ const SUB_AGENT_OPTIONS: { value: SubModelPreset; label: string; model: string; 
 const DEFAULT_MAIN: MainModelPreset = "sonnet";
 const DEFAULT_SUB: SubModelPreset = "haiku";
 
+// Hide the Persistent Memory UI section. Backend implementation (memory_tools.ts,
+// clearAgentMemory/openAgentMemoryFolder RPCs, ENABLE_MEMORY_TOOL flag) is intact —
+// flip this to re-expose the toggle.
+const SHOW_MEMORY_UI = false;
+
 const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, isByok }) => {
     const {
         rpcClient,
@@ -205,7 +210,8 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, isByok }) => {
                     )}
                 </SettingsSection>
 
-                {/* Persistent Memory */}
+                {/* Persistent Memory — hidden via SHOW_MEMORY_UI flag */}
+                {SHOW_MEMORY_UI && (
                 <SettingsSection title="Memory">
                     <div className="flex items-center justify-between">
                         <span className="text-[13px]" style={{ color: "var(--vscode-foreground)" }}>
@@ -266,6 +272,7 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, isByok }) => {
                         </div>
                     )}
                 </SettingsSection>
+                )}
 
                 {/* Account */}
                 <SettingsSection title="Account">
