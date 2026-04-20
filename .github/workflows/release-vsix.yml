@@ -51,6 +51,10 @@ on:
           - 'minor'
           - 'major'    
           - 'N/A'     
+      ballerinaLSTag:
+        type: string
+        description: 'Override Ballerina LS tag (latest, prerelease, or specific tag like v1.8.0.m1). Leave empty to use ls-version.properties.'
+        required: false
 
 jobs:
   Build:
@@ -69,6 +73,7 @@ jobs:
       mi:  ${{ inputs.mi }}
       hurl-client: ${{ inputs.hurl-client }}
       version: ${{ inputs.version }}
+      ballerinaLSTag: ${{ inputs.ballerinaLSTag }}
       isReleaseBuild: true
 
   Release:

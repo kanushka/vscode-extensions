@@ -57,6 +57,10 @@ on:
       isReleaseBuild:  
         type: boolean
         default: false
+      ballerinaLSTag:
+        default: ''
+        type: string
+        required: false
       runTests:
         type: boolean
         required: false
@@ -213,6 +217,7 @@ jobs:
           mi: ${{ inputs.mi }}
           hurl-client: ${{ inputs.hurl-client }}
           version: ${{ inputs.version }}
+          ballerinaLSTag: ${{ inputs.ballerinaLSTag }}
           token: ${{ secrets.CHOREO_BOT_TOKEN }}
           BALLERINA_AUTH_ORG: ${{ secrets.BALLERINA_AUTH_ORG }}
           BALLERINA_AUTH_CLIENT_ID: ${{ secrets.BALLERINA_AUTH_CLIENT_ID }}
