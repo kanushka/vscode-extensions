@@ -1164,8 +1164,8 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
 
             // Use global bal if installed, otherwise use local installation
             const pullCommand = isBallerinaInstalled 
-                ? (isWindows ? 'bal.bat tool pull mi-module-gen' : 'bal tool pull mi-module-gen')
-                : `${quotedBalCommand} tool pull mi-module-gen`;
+                ? (isWindows ? 'bal.bat tool pull migen' : 'bal tool pull migen')
+                : `${quotedBalCommand} tool pull migen`;
 
             console.debug('[Ballerina Build] Command to execute:', pullCommand);
             console.debug('[Ballerina Build] Working directory:', quotedProjectPath);
