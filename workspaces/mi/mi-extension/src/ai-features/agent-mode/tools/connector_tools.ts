@@ -126,11 +126,26 @@ function normalizeSelectionNames(names: unknown): string[] {
 
 /**
  * Derive initialization flags from LS connector result.
+ *
+ * Three patterns observed from `synapse/getConnectorInfo`:
+ *  - Connection-based (e.g. HTTP): `connections.length > 0`; the LS also
+ *    surfaces an `init` operation but marks it `isHidden: true` — that is
+ *    the connection initializer and belongs in a localEntry, referenced
+ *    via `configKey` from operations. We must NOT treat the hidden init
+ *    op as a signal for inline init.
+ *  - Inline-init module (e.g. mi-module-fhirbase): `connections.length === 0`
+ *    with a visible `init` operation that callers invoke inline inside a
+ *    sequence before other operations.
+ *  - Stateless: `connections.length === 0` and no visible `init` op —
+ *    operations are called directly.
  */
 function deriveInitFlags(lsResult: LSConnectorResult): { connectionLocalEntryNeeded: boolean; noInitializationNeeded: boolean } {
-    const noInitializationNeeded = lsResult.connections.length === 0;
-    const hasInitAction = lsResult.operations.some(a => normalizeIdentifier(a.name) === 'init');
-    const connectionLocalEntryNeeded = noInitializationNeeded ? false : !hasInitAction;
+    const hasConnections = lsResult.connections.length > 0;
+    const hasVisibleInitOp = lsResult.operations.some(
+        a => normalizeIdentifier(a.name) === 'init' && !a.isHidden
+    );
+    const connectionLocalEntryNeeded = hasConnections;
+    const noInitializationNeeded = !hasConnections && !hasVisibleInitOp;
     return { connectionLocalEntryNeeded, noInitializationNeeded };
 }
 
@@ -301,10 +316,13 @@ async function buildLSOperationDetails(
     const selectedOperations: any[] = [];
     const selectedConnections: any[] = [];
 
-    // Process requested operations
+    // Process requested operations. Hidden ops (e.g. the connection
+    // initializer surfaced as a hidden `init` for connection-based
+    // connectors) must not leak into tool output, even if the agent
+    // explicitly asks for them by name — treat them as not found.
     for (const reqOp of requestedOperations) {
         const action = lsResult.operations.find(
-            a => normalizeIdentifier(a.name) === reqOp
+            a => normalizeIdentifier(a.name) === reqOp && !a.isHidden
         );
 
         if (!action) {
