@@ -45,6 +45,24 @@ jobs:
             cp "$example" "$envfile"
           done
 
+      - name: Read Ballerina LS version
+        id: ls-version
+        run: |
+          LS_PROPS="workspaces/ballerina/ballerina-extension/ls-version.properties"
+          if [ -f "$LS_PROPS" ]; then
+            TAG=$(grep '^ls\.tag=' "$LS_PROPS" | cut -d'=' -f2 | tr -d '[:space:]')
+            echo "tag=$TAG" >> $GITHUB_OUTPUT
+            echo "Using LS tag from ls-version.properties: $TAG"
+          else
+            echo "tag=latest" >> $GITHUB_OUTPUT
+            echo "ls-version.properties not found, defaulting to latest"
+          fi
+
+      - name: Download Ballerina LS
+        run: pnpm --dir workspaces/ballerina/ballerina-extension run download-ls -- --tag "${{ steps.ls-version.outputs.tag }}" --replace
+        env:
+          GITHUB_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
+
       - name: Build Ballerina extension
         run: node common/scripts/install-run-rush.js build -t ballerina --verbose
         env:
