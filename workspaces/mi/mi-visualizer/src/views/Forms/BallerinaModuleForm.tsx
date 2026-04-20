@@ -66,9 +66,9 @@ export function BallerinaModuleForm(props: BallerinaModuleProps) {
 
     useEffect(() => {
         const checkJavaVersion = async () => {
-            const { javaDetails } = await rpcClient.getMiVisualizerRpcClient().getProjectSetupDetails();
-            if (javaDetails?.version) {
-                const majorVersion = parseInt(javaDetails.version.split('.')[0], 10);
+            const miVersionResponse = await rpcClient.getMiDiagramRpcClient().getMIVersionFromPom();
+            if (miVersionResponse.javaVersion) {
+                const majorVersion = parseInt(miVersionResponse.javaVersion, 10);
                 if (!isNaN(majorVersion) && majorVersion < 21) {
                     setJavaVersionWarning(true);
                 }

@@ -1310,6 +1310,10 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                             // https://github.com/wso2/mi-vscode/issues/952
                             await new Promise((resolve) => setTimeout(resolve, 1000));
                         }
+                        if (!fs.existsSync(zipPath)) {
+                            reject();
+                            return vscode.window.showErrorMessage(`Ballerina module build failed - output zip not found at ${zipPath}.`);
+                        }
                         await fs.promises.copyFile(zipPath, copyTo);
                         fs.rmSync(path.join(projectPath, 'target'), { recursive: true, force: true });
 
