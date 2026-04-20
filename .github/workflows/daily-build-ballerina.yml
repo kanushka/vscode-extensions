@@ -13,11 +13,11 @@ on:
         options:
           - 'all'
           - 'release/bi-1.8.x'
-          - 'release/bi-1.9.x'
+          - 'main'
 
 jobs:
   Build-and-Release:
-    name: "${{ matrix.branch }}"
+    name: "Ballerina daily build - ${{ matrix.branch }}"
     runs-on: ubuntu-latest
     timeout-minutes: 45
     if: ${{ inputs.branch == 'all' || inputs.branch == '' || inputs.branch == matrix.branch }}
@@ -26,7 +26,7 @@ jobs:
       matrix:
         branch:
           - release/bi-1.8.x
-          - release/bi-1.9.x
+          - main
     steps:
       - uses: actions/checkout@v4
         with:
