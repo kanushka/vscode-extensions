@@ -403,6 +403,64 @@ These patterns are confirmed to work correctly:
 \${urlDecode(params.queryParams.search)}
 \`\`\``,
 
+expression_v1_v2_coexistence: `## v1 XPath vs v2 Synapse Expressions — Coexistence
+
+Existing MI projects mix two expression dialects. Both still work; the v2 \`\${...}\` form is preferred for new code but the v1 XPath form is everywhere in legacy configs.
+
+### Equivalent forms side-by-side
+| Purpose | v1 (XPath / \`xpath=\`, \`expression=\`) | v2 (\`\${...}\` inside values/expressions) |
+|---------|---------------------------------------|------------------------------------------|
+| Payload field | \`json-eval($.user.name)\` | \`\${payload.user.name}\` |
+| Path param | \`get-property('uri.var.id')\` \\| \`$ctx:uri.var.id\` | \`\${params.pathParams.id}\` |
+| Query param | \`get-property('query.param.status')\` \\| \`$ctx:query.param.status\` | \`\${params.queryParams.status}\` |
+| Synapse property | \`get-property('PROP')\` \\| \`$ctx:PROP\` | \`\${props.synapse.PROP}\` |
+| Axis2 property | \`get-property('axis2', 'HTTP_SC')\` \\| \`$axis2:HTTP_SC\` | \`\${props.axis2.HTTP_SC}\` |
+| Transport header | \`get-property('transport', 'Content-Type')\` \\| \`$trp:Content-Type\` | \`\${headers['Content-Type']}\` |
+| Registry resource | \`get-property('registry', 'gov:/key')\` | \`\${registry('gov:/key')}\` |
+| Function param | \`$func:paramName\` | \`\${params.functionParams.paramName}\` |
+| Error properties | \`get-property('ERROR_MESSAGE')\` | \`\${props.synapse.ERROR_MESSAGE}\` |
+
+### Rules
+- **Attribute-level dialect is determined by the attribute**: \`xpath=\` and (legacy) \`expression=\` on property/filter/enrich mediators parse XPath 2.0. Newer mediators (\`variable\`, \`foreach\` v2, \`scatter-gather\`) use \`expression=\` but accept the \`\${...}\` v2 form.
+- **\`\${...}\` interpolation works in most value attributes** (\`value=\`, \`relativePath=\`, inline text) regardless of the mediator. XPath forms (\`$ctx:\`, \`get-property()\`) do NOT interpolate in \`value=\`.
+- **Don't mix within a single expression** — \`\${get-property('FOO')}\` is legal but confusing; prefer \`\${props.synapse.FOO}\`.
+- **\`$trp\` scope exists in XPath** but there is NO \`props.trp\` in v2 — use \`headers["X"]\`.
+
+### Common hallucinations to avoid
+- \`\${$ctx:uri.var.id}\` — mixing both forms, invalid.
+- \`\${payload['user.name']}\` — bracket-notation on JSONPath; works for keys with special chars, but a bare \`\${payload.user.name}\` is normally correct.
+- \`\${params.uri.var.id}\` — there is no \`params.uri\`, it's \`params.pathParams.id\`.
+- \`\${headers.Authorization}\` — works only if no special chars; prefer \`\${headers['Authorization']}\` as a safer default for any header with \`-\`, \`.\`, or space.`,
+
+json_payload_edge_cases: `## JSON Payload Edge Cases
+
+### Primitive-root payloads
+A JSON payload whose root is a **bare primitive** (\`42\`, \`"hello"\`, \`true\`, \`null\`, \`[1,2,3]\`) is valid JSON but trips up several access forms:
+- \`\${payload}\` returns the raw JSON value (usable in \`<log>\`, \`<payloadFactory>\`, connector params).
+- \`\${payload.field}\` throws "Could not evaluate JSONPath" for primitives and arrays at root.
+- \`json-eval($)\` returns the value as a string; \`json-eval($.items[*])\` on a bare array returns the elements.
+
+If you must operate on a primitive-root payload uniformly with object payloads, normalize first:
+\`\`\`xml
+<variable name="wrapped" type="JSON" expression="\${object('{\\"value\\": ' + payload + '}')}"/>
+\`\`\`
+
+### \`json-eval\` shape inconsistency
+\`json-eval($.items[*])\`:
+- If the match is a single element, returns the element (not a one-element array).
+- If it matches zero or multiple, returns a JSON array.
+- This "unwrap single" behavior causes NPEs in downstream mediators that expect an array.
+Workaround: wrap with an array coercion when you always want an array:
+\`\`\`xml
+<variable name="items" type="JSON" expression="\${array(json-eval($.items[*]))}"/>
+\`\`\`
+
+### JSON → XML conversion implicit namespaces
+When a JSON payload is converted to XML (e.g. via \`messageType=application/xml\`, or by a SOAP endpoint), the runtime synthesizes a \`<jsonObject>\` root and maps keys to elements. Keys with non-XML-safe characters (leading digits, colons) get prefixed with \`_\`. Don't rely on exact element names after JSON→XML unless you've verified them.
+
+### Content-Type drift via \`messageType\`
+Setting \`<property name="messageType" scope="axis2" value="application/xml"/>\` FORCES re-serialization on the next send: the JSON in-memory tree is converted to XML via the JSON-to-XML formatter, and the HTTP \`Content-Type\` header is rewritten. Setting \`<property name="ContentType" scope="axis2" value="application/xml"/>\` only changes the header label — no re-serialization — so the body stays in whatever shape it's in. These two properties are NOT interchangeable.`,
+
 anti_patterns: `## Anti-Patterns to Avoid
 
 ### Don't use outSequence
