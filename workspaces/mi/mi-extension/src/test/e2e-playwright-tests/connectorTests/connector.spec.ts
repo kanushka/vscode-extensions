@@ -76,75 +76,74 @@ export default function createTests() {
         await resource.click();
       });
 
-      // Uncomment the below steps once the functionality after fixing the issue: https://github.com/wso2/mi-vscode/issues/1451 is implemented
-      // await test.step('Download connector of specific version through modules list', async () => {
-      //   console.log('Downloading connector of specific version through add modules list ');
-      //   // diagram
-      //   const diagram = new Diagram(page.page, 'Resource');
-      //   await diagram.init();
-      //   await diagram.downloadConnectorThroughModulesList('File', 0, '4.0.44');
-      // });
+      await test.step('Download connector of specific version through modules list', async () => {
+        console.log('Downloading connector of specific version through add modules list ');
+        // diagram
+        const diagram = new Diagram(page.page, 'Resource');
+        await diagram.init();
+        await diagram.downloadConnectorThroughModulesList('File', 0, '6.0.2');
+      });
 
-      // await test.step('Add downloaded connector operation to resource', async () => {
-      //   console.log('Adding downloaded connector operation to resource');
-      //   // diagram
-      //   const diagram = new Diagram(page.page, 'Resource');
-      //   await diagram.init();
+      await test.step('Add downloaded connector operation to resource', async () => {
+        console.log('Adding downloaded connector operation to resource');
+        // diagram
+        const diagram = new Diagram(page.page, 'Resource');
+        await diagram.init();
 
-      //   await diagram.addConnectorOperation('File', 'createDirectory');
+        await diagram.addConnectorOperation('File', 'createDirectory');
 
-      //   // create connection through connector form
-      //   console.log('Create connection through connector operation form');
-      //   await diagram.addNewConnectionFromOperationForm();
+        // create connection through connector form
+        console.log('Create connection through connector operation form');
+        await diagram.addNewConnectionFromOperationForm();
 
-      //   const connectorStore = new ConnectorStore(page.page, "Resource View");
-      //   await connectorStore.init();
-      //   await connectorStore.selectOperation('LOCAL');
+        const connectorStore = new ConnectorStore(page.page, "Resource View");
+        await connectorStore.init();
+        await connectorStore.selectOperation('LOCAL');
 
-      //   const connectionForm = new Form(page.page, 'Resource View');
-      //   await connectionForm.switchToFormView(true);
-      //   console.log('Filling out connection form');
-      //   await connectionForm.fill({
-      //     values: {
-      //       'Connection Name*': {
-      //         type: 'input',
-      //         value: 'local_connection' + testAttempt,
-      //       },
-      //       'Working Directory': {
-      //         type: 'input',
-      //         value: 'examplefolder/tempfolder/'
-      //       }
-      //     }
-      //   });
-      //   await connectionForm.submit('Add');
+        const connectionForm = new Form(page.page, 'Resource View');
+        await connectionForm.switchToFormView(true);
+        console.log('Filling out connection form');
+        await connectionForm.fill({
+          values: {
+            'Connection Name*': {
+              type: 'input',
+              value: 'local_connection' + testAttempt,
+            },
+            'Working Directory': {
+              type: 'input',
+              value: 'examplefolder/tempfolder/'
+            }
+          }
+        });
+        await connectionForm.submit('Add');
 
-      //   // Fill connector form
-      //   console.log('Fill operation form');
-      //   await diagram.init();
-      //   await diagram.fillConnectorForm({
-      //     values: {
-      //       'Directory Path*': {
-      //         type: 'expression',
-      //         value: 'createdDirectory'
-      //       }
-      //     }
-      //   });
-      // });
+        // Fill connector form
+        console.log('Fill operation form');
+        await diagram.init();
+        await diagram.fillConnectorForm({
+          values: {
+            'Directory Path*': {
+              type: 'expression',
+              value: 'createdDirectory'
+            }
+          }
+        });
+      });
 
-      // await test.step('Edit connector operation in resource', async () => {
-      //   console.log('Editing connector operation in resource');
-      //   const diagram = new Diagram(page.page, 'Resource');
-      //   await diagram.init();
-      //   const connector = await diagram.getConnector('file', 'createDirectory');
-      //   await connector.edit({
-      //     values: {
-      //       'Directory Path*': {
-      //         type: 'expression',
-      //         value: 'createdDirectory'
-      //       }
-      //     }
-      //   });
-      // });
+      await test.step('Edit connector operation in resource', async () => {
+        console.log('Editing connector operation in resource');
+        const diagram = new Diagram(page.page, 'Resource');
+        await diagram.init();
+        const connector = await diagram.getConnector('file', 'createDirectory');
+        await connector.edit({
+          values: {
+            'Directory Path*': {
+              type: 'expression',
+              value: 'createdDirectory'
+            }
+          }
+        });
+      });
 
       await test.step('Download module through search', async () => {
         console.log('Downloading module through search');
