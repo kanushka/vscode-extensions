@@ -1195,6 +1195,14 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                     // Convert data to string with simplified logic
                     const errorMessage: string = data?.toString?.() ?? String(data);
 
+                    // Ignore Java logging warnings written to stderr (e.g. StAX dialect warnings)
+                    if (/^\w{3} \d{1,2}, \d{4}.*\n?WARNING:/m.test(errorMessage) ||
+                        /^WARNING:/m.test(errorMessage) ||
+                        errorMessage.trim() === '') {
+                        console.debug('[Ballerina Build] Ignoring stderr warning:', errorMessage.trim());
+                        return;
+                    }
+
                     console.debug('[Ballerina Build] Error encountered:', errorMessage);
                     const commonErrors = [
                         "spawn bal ENOENT",
@@ -1238,9 +1246,9 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                 }
                 ballerinaOutputChannel.clear();
                 const isWindows = process.platform === 'win32';
-                const moduleGenCommand = isBallerinaInstalled 
-                    ? (isWindows ? 'bal.bat mi-module-gen -i .' : 'bal mi-module-gen -i .') 
-                    : `${path.join(balHome, isWindows ? 'bal.bat' : 'bal')} mi-module-gen -i .`;
+                const moduleGenCommand = isBallerinaInstalled
+                    ? (isWindows ? 'bal.bat migen module' : 'bal migen module')
+                    : `${path.join(balHome, isWindows ? 'bal.bat' : 'bal')} migen module`;
 
                 console.debug('Running module gen command:', moduleGenCommand, 'in directory:', projectPath);
                 runBasicCommand(moduleGenCommand, projectPath,
@@ -1261,13 +1269,6 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                             console.debug('[Ballerina Build] Build output directory not found:', buildOutput);
                             reject();
                             return vscode.window.showErrorMessage("Ballerina module build process failed - no output generated.");
-                        }
-
-                        // Clean up old target folder if it exists
-                        const targetFolderPath = path.join(projectPath, 'target');
-                        if (fs.existsSync(targetFolderPath)) {
-                            console.debug('[Ballerina Build] Cleaning up old target folder');
-                            fs.rmSync(targetFolderPath, { recursive: true, force: true });
                         }
 
                         console.debug('[Ballerina Build] Reading module configuration');
@@ -1293,7 +1294,7 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                         console.debug('[Ballerina Build] Module name:', name, 'version:', version);
 
                         const zipName = name + "-connector-" + version + ".zip";
-                        const zipPath = path.join(projectPath, zipName);
+                        const zipPath = path.join(projectPath, "target", "mi", zipName);
                         console.debug('[Ballerina Build] Generated zip path:', zipPath);
 
                         const projectUri = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectPath))?.uri?.fsPath;
@@ -1310,7 +1311,7 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                             await new Promise((resolve) => setTimeout(resolve, 1000));
                         }
                         await fs.promises.copyFile(zipPath, copyTo);
-                        await fs.promises.rm(zipPath);
+                        fs.rmSync(path.join(projectPath, 'target'), { recursive: true, force: true });
 
                         progress.report({ increment: 10, message: "Completed Ballerina module build." });
                         vscode.window.showInformationMessage("Ballerina module build successful");
