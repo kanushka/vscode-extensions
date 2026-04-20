@@ -1,4 +1,4 @@
-name: Daily Build - Release Branch
+name: Ballerina Daily Build - Release Branch
 
 on:
   schedule:
