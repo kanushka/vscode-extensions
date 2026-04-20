@@ -684,7 +684,7 @@ async function handleConflictingCAppArtifacts(
             dep.artifact === cd.artifactId &&
             dep.version === cd.version
         ))
-        .filter((dep): dep is NonNullable<typeof dep> => dep !== undefined);
+        .filter((dep): dep is NonNullable<typeof dep> => dep !== undefined && dep.range !== undefined);
 
     if (dependenciesToRemove.length > 0) {
         await removePomEntries(projectUri, dependenciesToRemove.map((dep: any) => ({ range: dep.range, value: '' })));

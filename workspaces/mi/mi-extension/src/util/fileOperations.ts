@@ -1238,13 +1238,17 @@ export async function formatAndSavePomDocument(pomPath: string): Promise<void> {
         insertSpaces: editorConfig.get("insertSpaces") ?? false,
         trimTrailingWhitespace: editorConfig.get("trimTrailingWhitespace") ?? false
     };
-    const edits = await commands.executeCommand<TextEdit[]>(
-        "vscode.executeFormatDocumentProvider", Uri.file(pomPath), formattingOptions
-    );
-    if (edits && edits.length > 0) {
-        const formatEdit = new WorkspaceEdit();
-        formatEdit.set(Uri.file(pomPath), edits);
-        await workspace.applyEdit(formatEdit);
-        await workspace.openTextDocument(pomPath).then(doc => doc.save());
+    try {
+        const edits = await commands.executeCommand<TextEdit[]>(
+            "vscode.executeFormatDocumentProvider", Uri.file(pomPath), formattingOptions
+        );
+        if (edits && edits.length > 0) {
+            const formatEdit = new WorkspaceEdit();
+            formatEdit.set(Uri.file(pomPath), edits);
+            await workspace.applyEdit(formatEdit);
+        }
+    } catch {
+        // Formatter unavailable or not ready — skip formatting, proceed to save
     }
+    await workspace.openTextDocument(pomPath).then(doc => doc.save());
 }
