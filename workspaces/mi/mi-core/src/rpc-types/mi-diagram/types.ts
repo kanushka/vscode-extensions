@@ -1601,14 +1601,11 @@ export interface ConnectorInfo {
 export type GetConnectorInfoResponse = ConnectorInfo | string;
 
 // --- synapse/getInboundInfo ---
-// Accepts either a bundled id OR Maven coordinates. Returns an InboundEndpointInfo
-// or a plain string error.
-export interface GetInboundInfoRequest {
-    id?: string;
-    groupId?: string;
-    artifactId?: string;
-    version?: string;
-}
+// Accepts either a bundled id OR full Maven coordinates (never a partial mix).
+// Returns an InboundEndpointInfo or a plain string error.
+export type GetInboundInfoRequest =
+    | { id: string; groupId?: never; artifactId?: never; version?: never }
+    | { id?: never; groupId: string; artifactId: string; version: string };
 
 export interface InboundEndpointParameter {
     name: string;

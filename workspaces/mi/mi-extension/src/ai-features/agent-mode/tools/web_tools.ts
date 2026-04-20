@@ -83,7 +83,8 @@ async function requestWebApproval(
         kind: WebApprovalKind;
         approvalTitle: string;
         content: string;
-    }
+    },
+    mainAbortSignal?: AbortSignal
 ): Promise<boolean> {
     const approvalId = uuidv4();
 
@@ -98,20 +99,45 @@ async function requestWebApproval(
         content: request.content,
     } as any);
 
+    let settled = false;
+    const cleanup = (): void => {
+        if (settled) return;
+        settled = true;
+        pendingApprovals.delete(approvalId);
+        if (abortHandler && mainAbortSignal) {
+            mainAbortSignal.removeEventListener('abort', abortHandler);
+        }
+    };
+
+    let abortHandler: (() => void) | undefined;
+
     const approval = await new Promise<{ approved: boolean; feedback?: string }>((resolve, reject) => {
         pendingApprovals.set(approvalId, {
             approvalId,
             approvalKind: request.kind,
             sessionId: request.sessionId,
             resolve: (result) => {
-                pendingApprovals.delete(approvalId);
+                cleanup();
                 resolve(result);
             },
             reject: (error: Error) => {
-                pendingApprovals.delete(approvalId);
+                cleanup();
                 reject(error);
             }
         });
+
+        if (mainAbortSignal) {
+            if (mainAbortSignal.aborted) {
+                cleanup();
+                resolve({ approved: false });
+                return;
+            }
+            abortHandler = () => {
+                cleanup();
+                resolve({ approved: false });
+            };
+            mainAbortSignal.addEventListener('abort', abortHandler, { once: true });
+        }
     });
 
     return approval.approved;
@@ -142,7 +168,7 @@ export function createWebSearchExecute(
                 kind: 'web_search',
                 approvalTitle: 'Allow Web Search?',
                 content: `Agent wants to search the web for: "${args.query}"`,
-            });
+            }, mainAbortSignal);
         }
 
         if (!approved) {
@@ -250,7 +276,7 @@ export function createWebFetchExecute(
                 kind: 'web_fetch',
                 approvalTitle: 'Allow Web Fetch?',
                 content: `Agent wants to fetch content from: ${args.url}`,
-            });
+            }, mainAbortSignal);
         }
 
         if (!approved) {

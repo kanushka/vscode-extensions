@@ -59,20 +59,21 @@ interface ProcessItemResult {
 
 /**
  * Look up a per-item version override from the user-supplied map. The map is
- * keyed by the name as the agent passed it (e.g. "Redis" or "Kafka (Inbound)"),
- * but we accept case-insensitive lookups too — the agent isn't always consistent.
+ * keyed by the Maven artifact id the agent passed in (e.g. "mi-connector-redis"
+ * or "mi-inbound-amazonsqs"), but we accept case-insensitive lookups too — the
+ * agent isn't always consistent about casing.
  */
 function pickVersionOverride(
     versions: Record<string, string> | undefined,
-    itemName: string
+    itemId: string
 ): string | undefined {
     if (!versions) {
         return undefined;
     }
-    if (Object.prototype.hasOwnProperty.call(versions, itemName)) {
-        return versions[itemName];
+    if (Object.prototype.hasOwnProperty.call(versions, itemId)) {
+        return versions[itemId];
     }
-    const lower = itemName.trim().toLowerCase();
+    const lower = itemId.trim().toLowerCase();
     for (const key of Object.keys(versions)) {
         if (key.trim().toLowerCase() === lower) {
             return versions[key];

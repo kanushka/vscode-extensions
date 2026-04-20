@@ -161,8 +161,8 @@ Use for **guaranteed delivery**: persist first, deliver with retry, land failure
 store_mediator: `## Store Mediator (\`<store>\`) — Terminal Mediator
 
 \`\`\`xml
-<store messageStore="OrdersJMS"
-       [sequence="PostStoreSeq"]/>
+<!-- 'sequence' is optional; when set it runs in-flight before the store write. -->
+<store messageStore="OrdersJMS" sequence="PostStoreSeq"/>
 \`\`\`
 
 ### Behavior
@@ -179,9 +179,11 @@ store_mediator: `## Store Mediator (\`<store>\`) — Terminal Mediator
     <property name="HTTP_SC" value="202" scope="axis2"/>
     <payloadFactory media-type="json">
       <format>{"status": "accepted", "id": "$1"}</format>
-      <args><arg expression="\${payload.id}" evaluator="json"/></args>
+      <args><arg expression="$ctx:payload.id" evaluator="json"/></args>
     </payloadFactory>
-    <respond/>  <!-- respond FIRST if you want 202 to the client -->
+    <!-- <store> enqueues the current message AND returns the 202 response. -->
+    <!-- It is terminal — do NOT add <respond/> after it (and don't put <respond/>
+         before it, or the store write would never happen). -->
     <store messageStore="OrdersJMS"/>
   </inSequence>
 </resource>
@@ -189,7 +191,13 @@ store_mediator: `## Store Mediator (\`<store>\`) — Terminal Mediator
 
 ### Anti-pattern
 \`\`\`xml
-<!-- WRONG: store runs but respond never does because store ends mediation -->
+<!-- WRONG: <respond/> is terminal, so the store line never runs and the
+     message is never queued. Drop the <respond/>; <store> already returns
+     the response to the client. -->
+<respond/>
+<store messageStore="OrdersJMS"/>
+
+<!-- WRONG: <store> is also terminal, so <respond/> after it never runs. -->
 <store messageStore="OrdersJMS"/>
 <respond/>
 \`\`\``,

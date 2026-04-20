@@ -64,8 +64,10 @@ export const RG_EXCLUDED_DIRS = ['node_modules', '.git', '.devtools'] as const;
 /**
  * Glob patterns (ripgrep negated globs) that exclude sensitive credential
  * files and directories from grep/glob results. Mirrors the shell sandbox's
- * denylist so the agent can't exfiltrate SSH keys, cloud credentials, or
- * shell rc files via a search that happens to cross into the user's home dir.
+ * denylist (SENSITIVE_PATH_SEGMENTS + SENSITIVE_FILE_BASENAMES in
+ * shell_sandbox.ts) so the agent can't exfiltrate SSH keys, cloud credentials,
+ * or shell rc files via a search that happens to cross into the user's home dir.
+ * Keep this list in sync with shell_sandbox.ts.
  */
 export const RG_EXCLUDED_SENSITIVE_GLOBS = [
     '.ssh',
@@ -80,11 +82,15 @@ export const RG_EXCLUDED_SENSITIVE_GLOBS = [
     '.bash_profile',
     '.zshrc',
     '.zprofile',
+    '.zsh_history',
     '.profile',
     '.netrc',
     '.npmrc',
     '.pypirc',
     '.git-credentials',
+    'authorized_keys',
+    'credentials',
+    'known_hosts',
     'id_rsa',
     'id_dsa',
     'id_ecdsa',
@@ -317,6 +323,12 @@ export async function runRipgrepGuarded(
                 error: 'Error: Search timed out',
             },
         };
+    }
+    // Truncation short-circuits the process (we SIGTERM rg once MAX_STDOUT_BYTES
+    // is hit), which leaves exitCode=null. That is NOT an error — the captured
+    // stdout up to the cap is valid partial output; treat it as a success.
+    if (rgResult.truncated) {
+        return { result: rgResult };
     }
     // rg exit codes: 0 = matches, 1 = no matches (NOT an error), 2+ = real failure.
     if (rgResult.exitCode !== 0 && rgResult.exitCode !== 1) {

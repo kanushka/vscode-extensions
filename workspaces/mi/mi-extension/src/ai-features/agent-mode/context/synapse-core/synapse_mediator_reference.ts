@@ -400,39 +400,10 @@ Validates XML payloads against XSD schemas.
 | \`<on-fail>\` | YES | Must contain at least one mediator. Executes when validation fails |
 `,
 
-'for-each': `## ForEach Mediator (v2 — Collection-Based)
-
-Iterates over a collection (JSON array or XML nodeset) and executes a sequence for each element.
-
-### XML Schema
-\`\`\`xml
-<foreach collection="\${payload.items}" [parallel-execution="true|false"]
-         [counter-variable="i"] [result-type="JSON|XML"]
-         [result-target="body|variable"] [result-variable="varName"]
-         [result-enclosing-element="rootElement"]>
-  <sequence>
-    <!-- mediators to execute per element -->
-  </sequence>
-</foreach>
-\`\`\`
-
-### Key Attributes
-| Attribute | Required | Default | Notes |
-|-----------|----------|---------|-------|
-| \`collection\` | YES | -- | Synapse expression evaluating to array/nodeset |
-| \`parallel-execution\` | No | \`false\` | Whether iterations run in parallel |
-| \`counter-variable\` | No | -- | Variable name for iteration index (0-based) |
-| \`result-type\` | No | -- | \`JSON\` or \`XML\` — aggregated result format |
-| \`result-target\` | No | -- | \`body\` or \`variable\` — where aggregated result goes |
-| \`result-variable\` | Conditional | -- | Required when \`result-target="variable"\` |
-| \`result-enclosing-element\` | Conditional | -- | Required when \`result-type="XML"\` |
-
-### Key Behaviors
-- During iteration, \`\${payload}\` refers to the **current array element**, not the original payload
-- Original payload is restored after forEach completes
-- Sequences inside forEach **cannot contain call, send, or callout mediators**
-- Counter variable is accessible as \`\${vars.i}\` (if \`counter-variable="i"\`)
-`,
+// NOTE: the old `for-each` section (with result-type / result-target / result-variable
+// attributes) has been removed because it conflicts with the current `foreach` section
+// below, which documents the verified attribute names (result-content-type /
+// target-variable). See the `foreach` entry for the authoritative reference.
 
 scatter_gather: `## Scatter-Gather Mediator
 
@@ -752,7 +723,10 @@ Response caching for outbound calls. Paired request/response: one \`<cache>\` in
       </onCacheHit>
       <protocol type="HTTP">
         <methods>GET</methods>
-        <headersToExcludeInHash>Authorization, Date</headersToExcludeInHash>
+        <!-- Only exclude volatile headers (Date). Identity headers (Authorization,
+             Cookie, X-User-*) MUST stay in the hash so per-user responses don't
+             collide in the cache. -->
+        <headersToExcludeInHash>Date</headersToExcludeInHash>
         <responseCodes>2\\d\\d</responseCodes>
       </protocol>
     </cache>
@@ -771,7 +745,7 @@ Response caching for outbound calls. Paired request/response: one \`<cache>\` in
 ### Pitfalls
 - The two \`<cache>\` mediators **must share \`id\`** and appear on the same flow (before and after the backend call).
 - \`collector="true"\` has no other attributes — don't repeat \`timeout\`/\`maxMessageSize\` there.
-- Caching sensitive responses: ensure auth headers are in \`headersToExcludeInHash\` so per-user bodies don't collide.`,
+- Caching personalized responses: identity headers (Authorization, Cookie, X-User-*, X-Tenant-*, etc.) must be **included** in the hash so per-user bodies don't collide. \`headersToExcludeInHash\` should list only volatile headers like \`Date\` — never auth/session headers.`,
 
 call_send_loopback: `## \`<call>\` vs \`<send>\` vs \`<loopback/>\` — Flow Semantics
 
@@ -851,13 +825,11 @@ Legacy XPath form: \`get-property('ERROR_MESSAGE')\`.
   <log level="custom" category="ERROR">
     <property name="FAULT" expression="\${props.synapse.ERROR_MESSAGE}"/>
   </log>
-  <!-- Shape a deterministic response -->
+  <!-- Shape a deterministic response. <args> only accepts XPath/JSONPath,
+       so embed the Synapse v2 expression directly in <format> instead. -->
   <property name="HTTP_SC" value="502" scope="axis2" type="STRING"/>
   <payloadFactory media-type="json">
-    <format>{"error": "upstream_error", "detail": "$1"}</format>
-    <args>
-      <arg expression="\${props.synapse.ERROR_MESSAGE}" evaluator="xml"/>
-    </args>
+    <format>{"error": "upstream_error", "detail": "\${props.synapse.ERROR_MESSAGE}"}</format>
   </payloadFactory>
   <!-- Clear error state so downstream work doesn't re-trigger -->
   <property name="ERROR_CODE" action="remove" scope="default"/>

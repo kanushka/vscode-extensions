@@ -111,8 +111,12 @@ function toToolResult(output: any): ToolResult {
 /**
  * Creates execute function for the DeepWiki ask_question tool.
  * Uses a local MCP client (AI SDK MCP bridge) instead of Anthropic server-side mcpServers.
+ *
+ * The optional `mainAbortSignal` is threaded into the MCP client call so a
+ * user-initiated abort stops the in-flight HTTP request instead of blocking
+ * until the remote server responds.
  */
-export function createDeepWikiExecute(): DeepWikiAskQuestionExecuteFn {
+export function createDeepWikiExecute(mainAbortSignal?: AbortSignal): DeepWikiAskQuestionExecuteFn {
     return async (args): Promise<ToolResult> => {
         const repoName = normalizeRepoName(args.repoName);
         if ((Array.isArray(repoName) && repoName.length === 0) || (!Array.isArray(repoName) && repoName.length === 0)) {
@@ -129,6 +133,14 @@ export function createDeepWikiExecute(): DeepWikiAskQuestionExecuteFn {
                 success: false,
                 message: 'DeepWiki query failed: question is required.',
                 error: 'DEEPWIKI_INVALID_INPUT',
+            };
+        }
+
+        if (mainAbortSignal?.aborted) {
+            return {
+                success: false,
+                message: 'DeepWiki query aborted before dispatch.',
+                error: 'DEEPWIKI_ABORTED',
             };
         }
 
@@ -161,6 +173,7 @@ export function createDeepWikiExecute(): DeepWikiAskQuestionExecuteFn {
                 {
                     toolCallId: `deepwiki_${Date.now()}`,
                     messages: [],
+                    abortSignal: mainAbortSignal,
                 } as any
             );
 

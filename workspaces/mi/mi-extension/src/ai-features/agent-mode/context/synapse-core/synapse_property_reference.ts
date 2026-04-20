@@ -106,10 +106,10 @@ When a resource forwards to a backend, the incoming URI postfix (\`/orders/{id}?
   \`\`\`xml
   <property name="REST_URL_POSTFIX" scope="axis2" value="" type="STRING"/>
   \`\`\`
-- **Rewrite the postfix** before the call:
+- **Rewrite the postfix** before the call (use pure Synapse v2 interpolation; do NOT mix \`fn:concat\` with \`\${...}\`):
   \`\`\`xml
   <property name="REST_URL_POSTFIX" scope="axis2"
-            expression="fn:concat('/v2/', \${params.pathParams.id})" type="STRING"/>
+            expression="\${'/v2/' + params.pathParams.id}" type="STRING"/>
   \`\`\`
 
 Not setting this when the backend path differs from the inbound API path is a common cause of "404 with a weird URL" from the backend.`,

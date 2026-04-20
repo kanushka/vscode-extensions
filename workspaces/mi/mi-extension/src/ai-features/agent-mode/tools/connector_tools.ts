@@ -43,6 +43,7 @@ import {
     ResolvedVersion,
     VersionResolutionError,
 } from './connector_version';
+import { ensureOperationNotAborted } from './abort-utils';
 
 const NO_OUTPUT_SCHEMA_PLACEHOLDER = 'not available for this operation';
 
@@ -607,9 +608,13 @@ export async function findDisplayNameForArtifactId(
     if (bundled?.connectorName) {
         return bundled.connectorName;
     }
-    // Try bundled inbound list (id → name)
+    // Try bundled inbound list (id → name). Compare case-insensitively because
+    // the LS can return bundled ids with mixed casing (e.g. "HTTP", "jms").
     const local = await getLocalInboundCatalog(projectPath);
-    const match = local.bundled.find((b: LocalInboundCatalogEntry) => b.id === trimmed.toLowerCase());
+    const normalizedTrimmed = trimmed.toLowerCase();
+    const match = local.bundled.find((b: LocalInboundCatalogEntry) =>
+        typeof b.id === 'string' && b.id.toLowerCase() === normalizedTrimmed
+    );
     return match?.name ?? null;
 }
 
@@ -668,7 +673,7 @@ async function renderCatalogOutput(projectPath: string): Promise<string> {
  * Identifier is a Maven artifact id ("mi-connector-redis") or a bundled inbound id ("jms").
  * Classification picks one of three branches — see `classifyIdentifier`.
  */
-export function createConnectorExecute(projectPath: string): ConnectorExecuteFn {
+export function createConnectorExecute(projectPath: string, mainAbortSignal?: AbortSignal): ConnectorExecuteFn {
     return async (args: {
         mode?: ConnectorToolMode;
         artifact_id?: string;
@@ -689,6 +694,7 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
         // --- Catalog mode: no artifact_id required ---
         if (mode === 'catalog') {
             try {
+                ensureOperationNotAborted(mainAbortSignal, 'refreshing connector catalog');
                 const message = await renderCatalogOutput(projectPath);
                 logDebug(`[ConnectorTool] Catalog refreshed`);
                 return { success: true, message };
@@ -750,6 +756,7 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
                 warningSet.add('operation_names and connection_names apply only to connectors. Use parameter_names for inbound endpoints.');
             }
 
+            ensureOperationNotAborted(mainAbortSignal, `loading bundled inbound '${requestedId}'`);
             const inboundRes = await getInboundInfoFromLS(projectPath, { id: requestedId });
             if ('error' in inboundRes) {
                 return {
@@ -773,6 +780,7 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
 
         // --- Maven-inbound / Connector branch ---
         // Step 1: Look up maven coords from store cache (primary), fall back to static DB.
+        ensureOperationNotAborted(mainAbortSignal, `looking up store metadata for '${requestedId}'`);
         const { item: storeItem } = await lookupConnectorFromCache(
             projectPath,
             requestedId,
@@ -802,6 +810,7 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
         }
 
         // Step 2: Resolve target version (pom-or-latest default).
+        ensureOperationNotAborted(mainAbortSignal, `resolving version for '${requestedId}'`);
         let resolvedVersion: ResolvedVersion;
         try {
             resolvedVersion = await resolveTargetVersion(
@@ -826,6 +835,7 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
             if (requestedOperations.length > 0 || requestedConnections.length > 0) {
                 warningSet.add('operation_names and connection_names apply only to connectors. Use parameter_names for inbound endpoints.');
             }
+            ensureOperationNotAborted(mainAbortSignal, `loading inbound '${requestedId}' from LS`);
             const inboundRes = await getInboundInfoFromLS(projectPath, {
                 groupId, artifactId, version: resolvedVersion.version,
             });
@@ -851,6 +861,7 @@ export function createConnectorExecute(projectPath: string): ConnectorExecuteFn 
         }
 
         // Connector branch
+        ensureOperationNotAborted(mainAbortSignal, `loading connector '${requestedId}' from LS`);
         const connectorRes = await getConnectorInfoFromLS(projectPath, groupId, artifactId, resolvedVersion.version);
         if ('error' in connectorRes) {
             return {

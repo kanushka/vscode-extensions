@@ -27,7 +27,7 @@ import { CONNECTOR_DB } from "./connector_db";
 import { INBOUND_DB } from "./inbound_db";
 import { logInfo, logWarn, logError, logDebug } from "../logger";
 import { buildMessageContent } from "../message-utils";
-import { getConnectorInfoFromLS } from "../../agent-mode/tools/connector_ls_client";
+import { getConnectorInfoFromLS, getInboundInfoFromLS } from "../../agent-mode/tools/connector_ls_client";
 
 // Type definition for selected connectors
 type SelectedConnectors = {
@@ -85,7 +85,9 @@ async function getConnectorDefinitions(connectorNames: string[], projectPath?: s
 
 /**
  * Get full inbound endpoint definitions by names.
- * When projectPath is provided, enriches definitions with LS data.
+ * When projectPath is provided, enriches definitions with LS data via
+ * `synapse/getInboundInfo` (the inbound LS endpoint). Using the connector
+ * endpoint for inbounds would return the wrong shape or silently fail.
  */
 async function getInboundEndpointDefinitions(inboundNames: string[], projectPath?: string): Promise<Record<string, string>> {
     const definitions: Record<string, string> = {};
@@ -93,12 +95,62 @@ async function getInboundEndpointDefinitions(inboundNames: string[], projectPath
     for (const name of inboundNames) {
         const inbound = INBOUND_DB.find(i => i.connectorName === name);
         if (inbound) {
-            const enriched = await enrichWithLSData(inbound, name, projectPath);
+            const enriched = await enrichInboundWithLSData(inbound, name, projectPath);
             definitions[name] = JSON.stringify(enriched, null, 2);
         }
     }
 
     return definitions;
+}
+
+/**
+ * Enrich a static INBOUND_DB entry with LS data via `synapse/getInboundInfo`.
+ * Best-effort: returns the original definition if LS fails or the inbound has
+ * no Maven coordinates to resolve. Inbound LS responses have a flat
+ * `parameters` array (not `operations[].parameters`) — we merge it into the
+ * DB's init operation shape so downstream prompt rendering stays uniform.
+ */
+async function enrichInboundWithLSData(definition: any, name: string, projectPath?: string): Promise<any> {
+    if (!projectPath) {
+        return definition;
+    }
+
+    try {
+        const groupId = definition.mavenGroupId;
+        const artifactId = definition.mavenArtifactId;
+        const version = definition.version?.tagName;
+
+        if (!groupId || !artifactId || !version) {
+            return definition;
+        }
+
+        const lsResult = await getInboundInfoFromLS(projectPath, { groupId, artifactId, version });
+        if ('error' in lsResult) {
+            logDebug(`LS inbound enrichment skipped for '${name}': ${lsResult.error}`);
+            return definition;
+        }
+
+        const enriched = JSON.parse(JSON.stringify(definition));
+        const operations = enriched.version?.operations || enriched.operations || [];
+        const lsParameters = Array.isArray(lsResult.parameters) ? lsResult.parameters : [];
+        if (lsParameters.length > 0 && operations.length > 0) {
+            // Inbounds conventionally expose a single `init` operation in the static
+            // DB; fall through to the first operation if `init` isn't present.
+            const target = operations.find((op: any) => (op.name || '').toLowerCase() === 'init') ?? operations[0];
+            target.parameters = lsParameters.map(p => ({
+                name: p.name,
+                type: p.xsdType,
+                required: p.required,
+                description: p.description,
+            }));
+        }
+
+        logInfo(`Enriched inbound '${name}' with LS data (${lsParameters.length} parameters)`);
+        return enriched;
+    } catch (error) {
+        logWarn(`Failed to enrich inbound '${name}' with LS data: ${error instanceof Error ? error.message : String(error)}`);
+        return definition;
+    }
 }
 
 /**

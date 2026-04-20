@@ -612,7 +612,7 @@ export function createAgentTools(params: CreateToolsParams) {
 
         // Connector Tools (2 tools)
         [CONNECTOR_TOOL_NAME]: createConnectorTool(
-            getWrappedExecute(CONNECTOR_TOOL_NAME, createConnectorExecute(projectPath))
+            getWrappedExecute(CONNECTOR_TOOL_NAME, createConnectorExecute(projectPath, abortSignal))
         ),
         [CONTEXT_TOOL_NAME]: createContextTool(
             getWrappedExecute(CONTEXT_TOOL_NAME, createContextExecute(projectPath), false)
@@ -693,7 +693,7 @@ export function createAgentTools(params: CreateToolsParams) {
             ))
         ),
         [DEEPWIKI_ASK_QUESTION_TOOL_NAME]: createDeepWikiTool(
-            getWrappedExecute(DEEPWIKI_ASK_QUESTION_TOOL_NAME, createDeepWikiExecute())
+            getWrappedExecute(DEEPWIKI_ASK_QUESTION_TOOL_NAME, createDeepWikiExecute(abortSignal))
         ),
 
         // Log Tools (1 tool)

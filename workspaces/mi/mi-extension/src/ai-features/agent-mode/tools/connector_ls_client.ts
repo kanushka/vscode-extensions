@@ -18,6 +18,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
+import { GetInboundInfoRequest } from '@wso2/mi-core';
 import { MILanguageClient } from '../../../lang-client/activator';
 import { logDebug, logWarn } from '../../copilot/logger';
 
@@ -241,7 +242,7 @@ export async function getConnectorInfoFromLS(
  */
 export async function getInboundInfoFromLS(
     projectPath: string,
-    req: { id?: string; groupId?: string; artifactId?: string; version?: string }
+    req: GetInboundInfoRequest
 ): Promise<LSInboundResult | { error: string }> {
     try {
         const langClient = await MILanguageClient.getInstance(projectPath);
@@ -275,17 +276,19 @@ export async function readOutputSchema(
     outputSchemaDir: string,
     operationName: string
 ): Promise<any | null> {
+    if (!outputSchemaDir) {
+        return null;
+    }
+    const schemaPath = path.join(outputSchemaDir, `${operationName}.json`);
     try {
-        if (!outputSchemaDir) {
-            return null;
-        }
-        const schemaPath = path.join(outputSchemaDir, `${operationName}.json`);
-        if (!fs.existsSync(schemaPath)) {
-            return null;
-        }
-        const content = fs.readFileSync(schemaPath, 'utf-8');
+        // Use non-blocking fs; catch ENOENT as "no schema for this op" (legacy
+        // connectors simply don't ship per-action schemas).
+        const content = await fs.promises.readFile(schemaPath, 'utf-8');
         return JSON.parse(content);
     } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+            return null;
+        }
         logDebug(`[ConnectorLSClient] Failed to read output schema for '${operationName}': ${error instanceof Error ? error.message : String(error)}`);
         return null;
     }

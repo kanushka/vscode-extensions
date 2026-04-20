@@ -42,6 +42,7 @@ export function AICodeGenerator({ isUsageExceeded = false }: AICodeGeneratorProp
   const [showSettings, setShowSettings] = useState(false);
   const [isByok, setIsByok] = useState(false);
   const mainContainerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // Ignore scroll events produced by our own scrollIntoView so smooth-scroll
   // animation ticks don't flip isAtBottom=false mid-stream and freeze the UI.
@@ -85,8 +86,19 @@ export function AICodeGenerator({ isUsageExceeded = false }: AICodeGeneratorProp
   useEffect(() => {
       const container = mainContainerRef.current;
       if (container) {
-          const handleScroll = () => {
-              if (programmaticScrollRef.current) return;
+          const handleScroll = (event: Event) => {
+              // A user-initiated scroll (event.isTrusted=true) must always win
+              // over our programmatic-scroll suppression. Otherwise the user
+              // can get "stuck" at the bottom while streaming keeps restarting
+              // the suppression timer.
+              if (programmaticScrollRef.current) {
+                  if (!event.isTrusted) return;
+                  if (programmaticScrollTimerRef.current) {
+                      clearTimeout(programmaticScrollTimerRef.current);
+                      programmaticScrollTimerRef.current = null;
+                  }
+                  programmaticScrollRef.current = false;
+              }
               const { scrollTop, scrollHeight, clientHeight } = container;
               if (scrollHeight - scrollTop <= clientHeight + 50) {
                   setIsAtBottom(true);
@@ -114,16 +126,19 @@ export function AICodeGenerator({ isUsageExceeded = false }: AICodeGeneratorProp
 
   // Keep the viewport pinned to the bottom when async content (markdown,
   // syntax-highlighted code blocks, thinking segments) grows the container
-  // without firing a scroll event.
+  // without firing a scroll event. We observe the inner content wrapper
+  // because the outer <main> has fixed flex:1 dimensions — its size doesn't
+  // change when children grow, so a ResizeObserver on it wouldn't fire for
+  // scrollHeight changes.
   useEffect(() => {
-      const container = mainContainerRef.current;
-      if (!container || !isAtBottom) return;
+      const content = contentRef.current;
+      if (!content || !isAtBottom) return;
       const ro = new ResizeObserver(() => {
           if (!messagesEndRef.current) return;
           beginProgrammaticScroll(80);
           messagesEndRef.current.scrollIntoView({ block: "end" });
       });
-      ro.observe(container);
+      ro.observe(content);
       return () => ro.disconnect();
   }, [isAtBottom]);
 
@@ -150,26 +165,28 @@ export function AICodeGenerator({ isUsageExceeded = false }: AICodeGeneratorProp
 
               <div style={{ position: "relative", flex: 1, minHeight: 0, display: "flex", flexDirection: "column" }}>
                   <main style={{ flex: 1, overflowY: "auto" }} ref={mainContainerRef}>
-                      {Array.isArray(messages) && messages.length === 0 && <WelcomeMessage />}
+                      <div ref={contentRef}>
+                          {Array.isArray(messages) && messages.length === 0 && <WelcomeMessage />}
 
-                      {Array.isArray(messages) && messages.map((message, index) => {
-                          const checkpointId = message.role === Role.MIUser
-                              ? message.checkpointAnchorId
-                              : undefined;
+                          {Array.isArray(messages) && messages.map((message, index) => {
+                              const checkpointId = message.role === Role.MIUser
+                                  ? message.checkpointAnchorId
+                                  : undefined;
 
-                          return (
-                              <div key={`${typeof message.id === "number" ? message.id : "msg"}-${message.role}-${index}`} className="group/turn">
-                                  {checkpointId && <CheckpointIndicator targetCheckpointId={checkpointId} />}
-                                  <AIChatMessage
-                                      message={message}
-                                      index={index}
-                                  />
-                              </div>
-                          );
-                      })}
+                              return (
+                                  <div key={`${typeof message.id === "number" ? message.id : "msg"}-${message.role}-${index}`} className="group/turn">
+                                      {checkpointId && <CheckpointIndicator targetCheckpointId={checkpointId} />}
+                                      <AIChatMessage
+                                          message={message}
+                                          index={index}
+                                      />
+                                  </div>
+                              );
+                          })}
 
-                      <FileChangesSegment />
-                      <div ref={messagesEndRef} />
+                          <FileChangesSegment />
+                          <div ref={messagesEndRef} />
+                      </div>
                   </main>
 
                   {!isAtBottom && backendRequestTriggered && (

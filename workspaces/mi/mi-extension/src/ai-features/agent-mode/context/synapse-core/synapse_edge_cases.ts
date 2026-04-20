@@ -440,9 +440,13 @@ A JSON payload whose root is a **bare primitive** (\`42\`, \`"hello"\`, \`true\`
 - \`\${payload.field}\` throws "Could not evaluate JSONPath" for primitives and arrays at root.
 - \`json-eval($)\` returns the value as a string; \`json-eval($.items[*])\` on a bare array returns the elements.
 
-If you must operate on a primitive-root payload uniformly with object payloads, normalize first:
+If you must operate on a primitive-root payload uniformly with object payloads, normalize first. Do NOT try to build the JSON string by concatenating \`payload\` — \`\${object('{"value": ' + payload + '}')}\` produces invalid JSON when payload is a bare string (unescaped quotes) or null. Use a \`payloadFactory\` so string args are quoted correctly, then copy the rewritten payload into a variable:
 \`\`\`xml
-<variable name="wrapped" type="JSON" expression="\${object('{\\"value\\": ' + payload + '}')}"/>
+<payloadFactory media-type="json">
+  <format>{"value": $1}</format>
+  <args><arg expression="$body"/></args>
+</payloadFactory>
+<variable name="wrapped" type="JSON" expression="\${payload}"/>
 \`\`\`
 
 ### \`json-eval\` shape inconsistency
@@ -450,9 +454,9 @@ If you must operate on a primitive-root payload uniformly with object payloads, 
 - If the match is a single element, returns the element (not a one-element array).
 - If it matches zero or multiple, returns a JSON array.
 - This "unwrap single" behavior causes NPEs in downstream mediators that expect an array.
-Workaround: wrap with an array coercion when you always want an array:
+Workaround: use the v2 \`array()\` coercion directly against the v2 payload accessor — do NOT mix v1 \`json-eval\` inside a v2 \`\${...}\` expression.
 \`\`\`xml
-<variable name="items" type="JSON" expression="\${array(json-eval($.items[*]))}"/>
+<variable name="items" type="JSON" expression="\${array(payload.items)}"/>
 \`\`\`
 
 ### JSON → XML conversion implicit namespaces

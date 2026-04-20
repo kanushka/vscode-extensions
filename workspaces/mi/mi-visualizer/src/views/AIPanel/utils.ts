@@ -117,7 +117,10 @@ export function splitContent(content: string): ContentSegment[] {
     // Code block regex matches any language (or no language) followed by a newline.
     // Closing ``` must start a line (preceded by newline, or be at start of string)
     // so nested backticks inside JSON strings (e.g. tool outputs) don't prematurely close the block.
-    const regex = /```(\w*)\n([\s\S]*?)(?:\r?\n|^)```(?=\r?\n|$)|<toolcall([^>]*)>([^<]*?)<\/toolcall>|<todolist>([\s\S]*?)<\/todolist>|<bashoutput(?:\s+[^>]*)?>([\s\S]*?)<\/bashoutput>|<compact>([\s\S]*?)<\/compact>|<filechanges>([\s\S]*?)<\/filechanges>|<plan>([\s\S]*?)<\/plan>|<thinking(?:\s+[^>]*)?>([\s\S]*?)<\/thinking>/g;
+    // Closing ``` must be at the start of a line. The `(?:\r?\n|^)` alternative
+    // before the trailing ``` previously included `^`, which is unreachable in a
+    // non-anchored group — simplify to `\r?\n` only.
+    const regex = /```(\w*)\n([\s\S]*?)\r?\n```(?=\r?\n|$)|<toolcall([^>]*)>([^<]*?)<\/toolcall>|<todolist>([\s\S]*?)<\/todolist>|<bashoutput(?:\s+[^>]*)?>([\s\S]*?)<\/bashoutput>|<compact>([\s\S]*?)<\/compact>|<filechanges>([\s\S]*?)<\/filechanges>|<plan>([\s\S]*?)<\/plan>|<thinking(\s+[^>]*)?>([\s\S]*?)<\/thinking>/g;
     let start = 0;
 
     // Helper function to mark the last toolcall segment as complete
@@ -171,11 +174,14 @@ export function splitContent(content: string): ContentSegment[] {
             // <plan> block matched
             updateLastToolCallSegmentLoading();
             segments.push({ isPlan: true, loading: false, text: match[9] });
-        } else if (match[10] !== undefined) {
-            // <thinking> block matched
+        } else if (match[11] !== undefined) {
+            // <thinking> block matched (match[10] = attrs only, match[11] = body)
             updateLastToolCallSegmentLoading();
-            const isLoading = /data-loading="true"/.test(match[0]);
-            segments.push({ isThinking: true, loading: isLoading, text: match[10] });
+            // Test data-loading against the attrs capture only so occurrences of
+            // that substring inside the thinking body don't cause false positives.
+            const thinkingAttrs = match[10] || '';
+            const isLoading = /data-loading="true"/.test(thinkingAttrs);
+            segments.push({ isThinking: true, loading: isLoading, text: match[11] });
         }
         start = regex.lastIndex;
     }

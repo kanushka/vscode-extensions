@@ -258,7 +258,10 @@ function validateFilePathSecurity(
             };
         }
 
-        // Symlink protection: resolve real path and re-check containment
+        // Symlink protection: resolve real path and re-check containment + denylist.
+        // The sensitive-path denylist must apply to the resolved target too, otherwise
+        // a symlink inside the project can still exfiltrate SSH keys / cloud creds /
+        // .env files from the user's home dir.
         try {
             if (fs.existsSync(fullPath)) {
                 const realTarget = fs.realpathSync(fullPath);
@@ -267,6 +270,12 @@ function validateFilePathSecurity(
                     return {
                         valid: false,
                         error: 'File path resolves via symlink to a location outside the project.'
+                    };
+                }
+                if (isSensitiveTokenName(realTarget)) {
+                    return {
+                        valid: false,
+                        error: 'Access to sensitive credential paths (SSH keys, cloud credentials, .env files, shell rc files) is not allowed.'
                     };
                 }
             }

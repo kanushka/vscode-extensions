@@ -424,9 +424,10 @@ value of key 'backend.base.url' not found
 at startup when the property file is processed before the CAR is fully deployed. These are **non-fatal** — the properties resolve correctly once the CAR finishes deploying. Do NOT treat these startup messages as a failure signal unless the runtime actually rejects a \`\${configs.*}\` lookup later at request time.
 
 ### When \`configs.*\` is not a good fit
-If startup ordering or deployment-environment management is painful, either:
-- Hardcode the values in a \`<localEntry>\` and document them as configurable in the local entry comment, or
-- Use environment variables via \`\${sys.env.<VAR>}\` / \`\${vars.envValue}\` patterns with a bootstrap sequence.`,
+If startup ordering or deployment-environment management is painful, keep the artifact portable — do NOT bake production values into a \`<localEntry>\`. Instead:
+- Provide documented **defaults/placeholders** in a \`<localEntry>\` (clearly labelled as examples) and keep the real value injectable per environment, or
+- Read from environment/system properties via \`\${sys.env.<VAR>}\` / \`\${vars.envValue}\` patterns (optionally hydrated by a bootstrap sequence).
+Hardcoding values in \`<localEntry>\` couples each deploy to a specific environment and defeats the per-environment configuration story that \`configs.*\` is meant to solve.`,
 
 };
 

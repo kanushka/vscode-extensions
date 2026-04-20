@@ -233,8 +233,8 @@ Triggers a sequence/proxy on a schedule. Default implementation: \`MessageInject
       class="org.apache.synapse.startup.tasks.MessageInjector"
       group="synapse.simple.quartz"
       pinnedServers="">
-  <!-- Either simple trigger ... -->
-  <trigger interval="30" [count="-1"]/>
+  <!-- Either simple trigger ... (count="-1" means "run forever"; omit for one-shot) -->
+  <trigger interval="30" count="-1"/>
   <!-- ... or cron trigger -->
   <!-- <trigger cron="0 0/5 * * * ?"/> -->
 

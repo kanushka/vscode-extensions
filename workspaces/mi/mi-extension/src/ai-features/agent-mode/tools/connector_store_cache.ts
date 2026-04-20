@@ -267,13 +267,26 @@ function getInboundCatalogUrl(runtimeVersion: string): string {
     return (process.env.MI_CONNECTOR_STORE_BACKEND_INBOUND_ENDPOINTS ?? '').replace('${version}', runtimeVersion);
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit): Promise<Response> {
+async function fetchWithTimeout(
+    url: string,
+    init: RequestInit,
+    externalSignal?: AbortSignal
+): Promise<Response> {
     const controller = new AbortController();
     const timeoutHandle = setTimeout(() => controller.abort(), STORE_FETCH_TIMEOUT_MS);
+    const onExternalAbort = () => controller.abort();
+    if (externalSignal) {
+        if (externalSignal.aborted) {
+            controller.abort();
+        } else {
+            externalSignal.addEventListener('abort', onExternalAbort, { once: true });
+        }
+    }
     try {
         return await fetch(url, { ...init, signal: controller.signal });
     } finally {
         clearTimeout(timeoutHandle);
+        externalSignal?.removeEventListener('abort', onExternalAbort);
     }
 }
 

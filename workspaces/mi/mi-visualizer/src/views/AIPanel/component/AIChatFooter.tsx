@@ -1501,7 +1501,9 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
             if (lastMessage.role !== Role.MICopilot) {
                 return prevMessages;
             }
-            let content = lastMessage.content.replace(/<toolcall data-loading="true"[^>]*>[^<]*<\/toolcall>/g, '');
+            let content = lastMessage.content
+                .replace(/<toolcall data-loading="true"[^>]*>[^<]*<\/toolcall>/g, '')
+                .replace(/<bashoutput data-loading="true"[^>]*>[\s\S]*?<\/bashoutput>/g, '');
             content = content.trim();
             if (content.endsWith("*[Interrupted by user]*")) {
                 return prevMessages;

@@ -55,6 +55,21 @@ const SettingsPanel: React.FC<SettingsPanelProps> = ({ onClose, isByok }) => {
         setIsMemoryEnabled,
     } = useMICopilotContext();
 
+    // When the memory UI is hidden, force-clear any previously persisted
+    // "on" state. Otherwise a user who turned memory on while SHOW_MEMORY_UI
+    // was true keeps sending memoryEnabled=true to the backend silently — the
+    // toggle is no longer reachable to turn it off.
+    React.useEffect(() => {
+        if (!SHOW_MEMORY_UI) {
+            setIsMemoryEnabled(false);
+            try {
+                localStorage.removeItem('mi-agent-memory-enabled');
+            } catch {
+                /* ignore storage failures */
+            }
+        }
+    }, [setIsMemoryEnabled]);
+
     const handleLogout = async () => {
         await rpcClient?.getMiDiagramRpcClient().logoutFromMIAccount();
     };

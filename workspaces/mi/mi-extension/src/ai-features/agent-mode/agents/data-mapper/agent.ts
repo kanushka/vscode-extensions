@@ -178,6 +178,14 @@ export async function executeDataMapperAgent(
 
         logDebug(`[DataMapperAgent] Extracted mapping body: ${mappingBody.substring(0, 100)}...`);
 
+        // Bail out if the user aborted while the AI call was in flight —
+        // don't mutate the TypeScript source file with stale generated code.
+        if (request.abortSignal?.aborted) {
+            const err: any = new Error('Data mapper generation aborted by user');
+            err.name = 'AbortError';
+            throw err;
+        }
+
         // 5. Update the file using ts-morph
         const project = new Project();
         const sourceFile = project.addSourceFileAtPath(resolvedTsFilePath);
