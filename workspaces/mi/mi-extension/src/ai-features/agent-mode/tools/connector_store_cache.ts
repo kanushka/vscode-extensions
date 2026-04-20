@@ -492,7 +492,9 @@ export async function lookupConnectorFromCache(
             const fetched = await fetchCatalogFromStore(itemType, runtimeVersionUsed);
             await writeCatalogCache(cachePath, itemType, runtimeVersionUsed, fetched);
             return { data: fetched, source: 'store' as ConnectorStoreSource };
-        } catch {
+        } catch (err) {
+            const errMsg = err instanceof Error ? err.message : String(err);
+            logWarn(`[ConnectorStoreCache] Falling back to stale ${itemType} cache at ${cachePath} after store fetch failure: ${errMsg}`);
             const cached = await readCatalogCache(cachePath);
             return { data: cached?.data ?? [], source: 'stale-cache' as ConnectorStoreSource };
         }

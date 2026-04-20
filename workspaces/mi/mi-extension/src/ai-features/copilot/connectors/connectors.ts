@@ -134,7 +134,7 @@ async function enrichWithLSData(definition: any, name: string, projectPath?: str
         const operations = enriched.version?.operations || enriched.operations || [];
         for (const op of operations) {
             const lsOperation = lsResult.operations.find(a =>
-                a.name.toLowerCase() === (op.name || '').toLowerCase()
+                (a.name || '').toLowerCase() === (op.name || '').toLowerCase()
             );
             if (lsOperation) {
                 // Replace parameters with LS versions (has xsdType)

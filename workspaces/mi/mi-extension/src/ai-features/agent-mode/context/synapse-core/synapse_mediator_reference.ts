@@ -679,11 +679,7 @@ Each iteration's **final payload** (the payload at the end of the iteration's se
   <sequence>
     <!-- iteration-local payload is one order -->
     <payloadFactory media-type="json">
-      <format>{"id": "$1", "total": $2}</format>
-      <args>
-        <arg expression="\${payload.id}" evaluator="json"/>
-        <arg expression="\${payload.qty * payload.price}" evaluator="json"/>
-      </args>
+      <format>{"id": "\${payload.id}", "total": \${payload.qty * payload.price}}</format>
     </payloadFactory>
     <!-- this payload becomes one element of vars.enrichedOrders -->
   </sequence>
