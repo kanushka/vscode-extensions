@@ -115,12 +115,13 @@ export function splitContent(content: string): ContentSegment[] {
     let match;
     // Updated regex to include <toolcall>, <todolist>, <bashoutput>, <compact>, <filechanges>, <plan>, and <thinking> tags.
     // Code block regex matches any language (or no language) followed by a newline.
-    // Closing ``` must start a line (preceded by newline, or be at start of string)
-    // so nested backticks inside JSON strings (e.g. tool outputs) don't prematurely close the block.
-    // Closing ``` must be at the start of a line. The `(?:\r?\n|^)` alternative
-    // before the trailing ``` previously included `^`, which is unreachable in a
-    // non-anchored group — simplify to `\r?\n` only.
-    const regex = /```(\w*)\n([\s\S]*?)\r?\n```(?=\r?\n|$)|<toolcall([^>]*)>([^<]*?)<\/toolcall>|<todolist>([\s\S]*?)<\/todolist>|<bashoutput(?:\s+[^>]*)?>([\s\S]*?)<\/bashoutput>|<compact>([\s\S]*?)<\/compact>|<filechanges>([\s\S]*?)<\/filechanges>|<plan>([\s\S]*?)<\/plan>|<thinking(\s+[^>]*)?>([\s\S]*?)<\/thinking>/g;
+    // The closing ``` must start a line so nested backticks inside JSON strings
+    // (e.g. tool outputs) don't prematurely close the block. For a non-empty body
+    // the preceding \r?\n is consumed as the boundary; for an empty body the
+    // opening fence's \n already sits right before the closer, so we fall back
+    // to a `(?<=\n)` lookbehind (which doesn't consume) — otherwise `\`\`\`\n\`\`\``
+    // wouldn't match at all.
+    const regex = /```(\w*)\n([\s\S]*?)(?:\r?\n|(?<=\n))```(?=\r?\n|$)|<toolcall([^>]*)>([^<]*?)<\/toolcall>|<todolist>([\s\S]*?)<\/todolist>|<bashoutput(?:\s+[^>]*)?>([\s\S]*?)<\/bashoutput>|<compact>([\s\S]*?)<\/compact>|<filechanges>([\s\S]*?)<\/filechanges>|<plan>([\s\S]*?)<\/plan>|<thinking(\s+[^>]*)?>([\s\S]*?)<\/thinking>/g;
     let start = 0;
 
     // Helper function to mark the last toolcall segment as complete

@@ -1122,8 +1122,12 @@ export function createGrepExecute(projectPath: string): GrepExecuteFn {
             };
         }
 
-        // Build the rg argument list.
-        const rgArgs: string[] = ['--no-follow'];
+        // Build the rg argument list. Match glob's ignore semantics (--no-ignore
+        // + --no-ignore-vcs) so grep results don't silently skip files the glob
+        // tool would return — e.g. target/, build/, and anything else covered
+        // by a project .gitignore. RG_EXCLUDED_DIRS / RG_EXCLUDED_SENSITIVE_GLOBS
+        // below are the single source of truth for what grep hides.
+        const rgArgs: string[] = ['--no-follow', '--no-ignore', '--no-ignore-vcs'];
         if (output_mode === 'files_with_matches') {
             rgArgs.push('-l');
         } else if (output_mode === 'count') {

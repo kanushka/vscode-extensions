@@ -82,6 +82,40 @@ function pickVersionOverride(
     return undefined;
 }
 
+/**
+ * Resolve a version string for the remove path. The underlying RPC ignores
+ * the version (it matches pom entries by groupId + artifact only), but the
+ * DependencyDetails shape still requires a string. This helper tries, in
+ * order: an explicit override, the pom-declared version, the latest from
+ * the store cache, and finally an empty placeholder. It never throws —
+ * a remove must not fail just because version metadata is stale/offline.
+ */
+async function resolveRemoveVersion(
+    projectPath: string,
+    target: { name: string; groupId: string; artifactId: string; latestVersion: string },
+    versionOverride: string | undefined
+): Promise<ResolvedVersion> {
+    const override = typeof versionOverride === 'string' ? versionOverride.trim() : '';
+    // Explicit override wins, whether it's a concrete version or 'pom'/'latest'.
+    if (override.length > 0) {
+        try {
+            return await resolveTargetVersion(projectPath, target, versionOverride, 'latest');
+        } catch {
+            // Fall through to best-effort resolution below.
+        }
+    }
+    // Best-effort: try 'pom' first so we pass what's actually declared.
+    try {
+        return await resolveTargetVersion(projectPath, target, 'pom', 'latest');
+    } catch {
+        // Not declared in pom — continue.
+    }
+    if (target.latestVersion) {
+        return { version: target.latestVersion, source: 'latest' };
+    }
+    return { version: '', source: 'override' };
+}
+
 interface ConnectorDefinition {
     mavenGroupId?: string;
     mavenArtifactId?: string;
@@ -316,17 +350,33 @@ async function processItem(
             };
         }
 
-        // Resolve target version. Default for add/remove is "latest" — pom-version isn't
-        // meaningful here ("install the version that's already installed" is a no-op for add,
-        // and remove doesn't need a version at all but updateAiDependencies requires one).
+        // Resolve target version.
+        //
+        // For 'add', default strategy is "latest" — pom-version isn't meaningful
+        // because "install the version that's already installed" is a no-op.
+        //
+        // For 'remove', the underlying updateAiDependencies RPC matches only on
+        // groupId + artifact and ignores the version. We still need *some* string
+        // because DependencyDetails requires one, but we must not fail the remove
+        // just because the store/cache has no latestVersion (offline, new runtime
+        // version without a catalog, etc.). Try 'pom' first as a best-effort, then
+        // fall back to latestVersion, then to an empty placeholder.
         let resolved: ResolvedVersion;
         try {
-            resolved = await resolveTargetVersion(
-                projectPath,
-                { name: itemName, groupId: mavenGroupId, artifactId: mavenArtifactId, latestVersion },
-                versionOverride,
-                'latest'
-            );
+            if (isAdd) {
+                resolved = await resolveTargetVersion(
+                    projectPath,
+                    { name: itemName, groupId: mavenGroupId, artifactId: mavenArtifactId, latestVersion },
+                    versionOverride,
+                    'latest'
+                );
+            } else {
+                resolved = await resolveRemoveVersion(
+                    projectPath,
+                    { name: itemName, groupId: mavenGroupId, artifactId: mavenArtifactId, latestVersion },
+                    versionOverride
+                );
+            }
         } catch (err) {
             if (err instanceof VersionResolutionError) {
                 return {
