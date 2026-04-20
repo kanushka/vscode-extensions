@@ -33,7 +33,7 @@ import { VisualizerWebview, webviews } from './webview';
 import * as fs from 'fs';
 import { AiPanelWebview } from '../ai-features/webview';
 import { MiDiagramRpcManager } from '../rpc-managers/mi-diagram/rpc-manager';
-import { log } from '../util/logger';
+import { log, outputChannel } from '../util/logger';
 import { CACHED_FOLDER, INTEGRATION_PROJECT_DEPENDENCIES_DIR, isConsolidatedProject } from '../util/onboardingUtils';
 import { extractZip, formatAndSavePomDocument, getHash, zipProjectFolder } from '../util/fileOperations';
 import { MILanguageClient } from '../lang-client/activator';
@@ -664,9 +664,19 @@ async function handleConflictingCAppArtifacts(
                 : '';
             return `${dep}${conflictingList}`;
         })
-        .join('\n');
-    const warningMessage = `Conflicting artifacts were identified with the current project or other dependent projects. Hence, they will be removed from pom.xml if available:\n${depList}`;
-    await window.showWarningMessage(warningMessage, { modal: true });
+        .join('\n\n');
+
+    const header = "Conflicting artifacts were identified with the current project or other dependent projects. They will be removed from pom.xml if available.";
+    const fullMessage = `${header}\n\n${depList}`;
+
+    outputChannel.appendLine("[Conflicting CApp Artifacts] " + fullMessage);
+
+    const MAX_LENGTH = 500;
+    const displayMessage = fullMessage.length > MAX_LENGTH
+        ? fullMessage.substring(0, MAX_LENGTH) + '\n\n...(truncated, see "WSO2 Integrator: MI" output channel for full details)'
+        : fullMessage;
+
+    await window.showWarningMessage(displayMessage, { modal: true });
 
     const projectDetails = await langClient.getProjectDetails();
     const existingDependencies = projectDetails.dependencies || {};
