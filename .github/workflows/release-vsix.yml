@@ -53,7 +53,7 @@ on:
           - 'N/A'     
       ballerinaLSTag:
         type: string
-        description: 'Override Ballerina LS tag (latest, prerelease, or specific tag like v1.8.0.m1). Leave empty to use ls-version.properties.'
+        description: 'Override Ballerina LS tag (latest, prerelease, or specific tag like v1.8.0.m1). Leave empty to use release.properties.'
         required: false
 
 jobs:

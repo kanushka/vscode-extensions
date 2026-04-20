@@ -10,7 +10,7 @@ inputs:
     default: false
     type: boolean
   ballerinaLSTag:
-    description: 'Override LS tag (latest, prerelease, or specific tag like v1.8.0.m1). If empty, reads from ls-version.properties.'
+    description: 'Override LS tag (latest, prerelease, or specific tag like v1.8.0.m1). If empty, reads from release.properties.'
     default: ''
     type: string
   ballerina:
@@ -187,19 +187,19 @@ runs:
       id: bal-ls-version
       shell: bash
       run: |
-        LS_PROPS="workspaces/ballerina/ballerina-extension/ls-version.properties"
+        LS_PROPS="workspaces/ballerina/ballerina-extension/release.properties"
         if [ -n "$OVERRIDE_TAG" ]; then
           TAG="$OVERRIDE_TAG"
           echo "Using override LS tag: $TAG"
         elif [ -f "$LS_PROPS" ]; then
           TAG=$(grep '^ls\.tag=' "$LS_PROPS" | cut -d'=' -f2 | tr -d '[:space:]')
-          echo "Using LS tag from ls-version.properties: $TAG"
+          echo "Using LS tag from release.properties: $TAG"
         else
           TAG="latest"
-          echo "ls-version.properties not found, defaulting to latest"
+          echo "release.properties not found, defaulting to latest"
         fi
         if [ -z "$TAG" ]; then
-          echo "::error::ls.tag is empty in ls-version.properties. Please set a valid tag (e.g., latest, prerelease, or v1.8.0.m1)."
+          echo "::error::ls.tag is empty in release.properties. Please set a valid tag (e.g., latest, prerelease, or v1.8.0.m1)."
           exit 1
         fi
         echo "tag=$TAG" >> $GITHUB_OUTPUT

@@ -38,12 +38,27 @@ The `--replace` flag clears the existing `ls/` directory before downloading.
 
 The build will fail with a clear message if the `ls` directory does not contain a `ballerina-language-server*.jar`.
 
-## CI/CD Pipeline Version
+## CI/CD Pipeline Configuration
 
-Pipelines read the LS version from `ls-version.properties` in this directory. To pin a specific version for a branch, update:
+Pipelines read configuration from `release.properties` in this directory:
+
+```properties
+# Language server tag
+ls.tag=latest
+# Product-integrator branch for version update PRs (leave empty to skip)
+integrator.branch=
+```
+
+To pin a specific LS version for a branch, update `ls.tag`:
 
 ```properties
 ls.tag=v1.8.0.m1
+```
+
+To enable automatic PRs to product-integrator after daily builds, set the target branch:
+
+```properties
+integrator.branch=5.0.x
 ```
 
 ## BI End-to-End Tests

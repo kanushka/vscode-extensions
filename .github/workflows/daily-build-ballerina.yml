@@ -48,19 +48,34 @@ jobs:
       - name: Read Ballerina LS version
         id: ls-version
         run: |
-          LS_PROPS="workspaces/ballerina/ballerina-extension/ls-version.properties"
-          if [ -f "$LS_PROPS" ]; then
-            TAG=$(grep '^ls\.tag=' "$LS_PROPS" | cut -d'=' -f2 | tr -d '[:space:]')
-            echo "Using LS tag from ls-version.properties: $TAG"
+          PROPS="workspaces/ballerina/ballerina-extension/release.properties"
+          if [ -f "$PROPS" ]; then
+            TAG=$(grep '^ls\.tag=' "$PROPS" | cut -d'=' -f2 | tr -d '[:space:]')
+            echo "Using LS tag from release.properties: $TAG"
           else
             TAG="latest"
-            echo "ls-version.properties not found, defaulting to latest"
+            echo "release.properties not found, defaulting to latest"
           fi
           if [ -z "$TAG" ]; then
-            echo "::error::ls.tag is empty in ls-version.properties. Please set a valid tag (e.g., latest, prerelease, or v1.8.0.m1)."
+            echo "::error::ls.tag is empty in release.properties. Please set a valid tag (e.g., latest, prerelease, or v1.8.0.m1)."
             exit 1
           fi
           echo "tag=$TAG" >> $GITHUB_OUTPUT
+
+      - name: Read product-integrator branch
+        id: integrator-config
+        run: |
+          PROPS="workspaces/ballerina/ballerina-extension/release.properties"
+          BRANCH=""
+          if [ -f "$PROPS" ]; then
+            BRANCH=$(grep '^integrator\.branch=' "$PROPS" | cut -d'=' -f2 | tr -d '[:space:]')
+          fi
+          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          if [ -n "$BRANCH" ]; then
+            echo "Product-integrator target branch: $BRANCH"
+          else
+            echo "No integrator.branch set, UpdateProductIntegrator will be skipped"
+          fi
 
       - name: Download Ballerina LS
         run: pnpm --dir workspaces/ballerina/ballerina-extension run download-ls -- --tag "${{ steps.ls-version.outputs.tag }}" --replace
@@ -102,6 +117,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       vsixFileName: ${{ steps.vsix.outputs.fileName }}
+      integratorBranch: ${{ steps.integrator-config.outputs.branch }}
 
   Release:
     name: Create GitHub Release
@@ -176,19 +192,20 @@ jobs:
   UpdateProductIntegrator:
     name: Update product-integrator version
     needs: [Build, Release]
-    if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
+    if: ${{ success() && github.repository == 'wso2/vscode-extensions' && needs.Build.outputs.integratorBranch != '' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout product-integrator
         uses: actions/checkout@v4
         with:
           repository: wso2/product-integrator
-          ref: 5.0.x
+          ref: ${{ needs.Build.outputs.integratorBranch }}
           token: ${{ secrets.CHOREO_BOT_TOKEN }}
 
       - name: Update ballerina.extension.version
         env:
           NEW_VERSION: ${{ needs.Build.outputs.version }}
+          INTEGRATOR_BRANCH: ${{ needs.Build.outputs.integratorBranch }}
           GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
         run: |
           PROPERTIES_FILE="ci/build/component-versions.properties"
@@ -220,7 +237,7 @@ jobs:
           pr_response=$(curl -s -X POST \
             -H "Accept: application/vnd.github.v3+json" \
             -H "Authorization: token $GH_TOKEN" \
-            -d "{\"title\": \"Update ballerina.extension.version to ${NEW_VERSION}\", \"head\": \"${BRANCH_NAME}\", \"base\": \"5.0.x\", \"body\": \"Automated PR to update Ballerina extension version after daily build.\\n\\nRelease: https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v${NEW_VERSION}\"}" \
+            -d "{\"title\": \"Update ballerina.extension.version to ${NEW_VERSION}\", \"head\": \"${BRANCH_NAME}\", \"base\": \"${INTEGRATOR_BRANCH}\", \"body\": \"Automated PR to update Ballerina extension version after daily build.\\n\\nRelease: https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v${NEW_VERSION}\"}" \
             "https://api.github.com/repos/wso2/product-integrator/pulls")
 
           pr_url=$(echo "$pr_response" | jq -r '.html_url // empty')
