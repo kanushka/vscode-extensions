@@ -202,13 +202,18 @@ runs:
           echo "::error::ls.tag is empty in release.properties. Please set a valid tag (e.g., latest, prerelease, or v1.8.0.m1)."
           exit 1
         fi
-        echo "tag=$TAG" >> $GITHUB_OUTPUT
+        printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
+        if [ "$TAG" = "latest" ] || [ "$TAG" = "prerelease" ]; then
+          echo "cacheable=false" >> "$GITHUB_OUTPUT"
+        else
+          echo "cacheable=true" >> "$GITHUB_OUTPUT"
+        fi
       env:
         OVERRIDE_TAG: ${{ inputs.ballerinaLSTag }}
 
     - name: Restore Ballerina LS from cache
       id: ballerina-ls-cache
-      if: ${{ inputs.enableLSCache == 'true' }}
+      if: ${{ inputs.enableLSCache == 'true' && steps.bal-ls-version.outputs.cacheable == 'true' }}
       uses: actions/cache@v4
       with:
         path: workspaces/ballerina/ballerina-extension/ls
@@ -216,7 +221,7 @@ runs:
         retention-days: 1
 
     - name: Download Ballerina LS
-      if: ${{ steps.ballerina-ls-cache.outputs.cache-hit != 'true' }}
+      if: ${{ steps.bal-ls-version.outputs.cacheable != 'true' || steps.ballerina-ls-cache.outputs.cache-hit != 'true' }}
       shell: bash
       run: |
         pnpm --dir workspaces/ballerina/ballerina-extension run download-ls -- --tag "$LS_TAG" --replace

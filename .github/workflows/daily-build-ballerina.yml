@@ -77,7 +77,11 @@ jobs:
             echo "::error::ls.tag is empty in release.properties. Please set a valid tag (e.g., latest, prerelease, or v1.8.0.m1)."
             exit 1
           fi
-          echo "tag=$TAG" >> $GITHUB_OUTPUT
+          if ! [[ "$TAG" =~ ^(latest|prerelease|[A-Za-z0-9._/-]+)$ ]]; then
+            echo "::error::Invalid ls.tag '$TAG'. Use latest, prerelease, or a release tag containing only letters, numbers, '.', '_', '-' or '/'."
+            exit 1
+          fi
+          printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
 
       - name: Read product-integrator branch
         id: integrator-config
@@ -87,7 +91,11 @@ jobs:
           if [ -f "$PROPS" ]; then
             BRANCH=$(grep '^integrator\.branch=' "$PROPS" | cut -d'=' -f2 | tr -d '[:space:]')
           fi
-          echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+          if ! [[ "$BRANCH" =~ ^[A-Za-z0-9._/-]*$ ]]; then
+            echo "::error::Invalid integrator.branch '$BRANCH'. Use only letters, numbers, '.', '_', '-', '/' or leave empty."
+            exit 1
+          fi
+          printf 'branch=%s\n' "$BRANCH" >> "$GITHUB_OUTPUT"
           if [ -n "$BRANCH" ]; then
             echo "Product-integrator target branch: $BRANCH"
           else
@@ -95,8 +103,9 @@ jobs:
           fi
 
       - name: Download Ballerina LS
-        run: pnpm --dir workspaces/ballerina/ballerina-extension run download-ls -- --tag "${{ steps.ls-version.outputs.tag }}" --replace
+        run: pnpm --dir workspaces/ballerina/ballerina-extension run download-ls -- --tag "$LS_TAG" --replace
         env:
+          LS_TAG: ${{ steps.ls-version.outputs.tag }}
           GITHUB_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
 
       - name: Build Ballerina extension
