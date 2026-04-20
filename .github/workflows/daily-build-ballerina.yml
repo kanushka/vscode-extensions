@@ -4,16 +4,33 @@ on:
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
+    inputs:
+      branch:
+        type: choice
+        description: 'Branch to build (or "all" for all branches)'
+        required: true
+        default: 'all'
+        options:
+          - 'all'
+          - 'release/bi-1.8.x'
+          - 'release/bi-1.9.x'
 
 jobs:
-  Build:
-    name: Build Ballerina Extension
+  Build-and-Release:
+    name: "${{ matrix.branch }}"
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    if: ${{ inputs.branch == 'all' || inputs.branch == '' || inputs.branch == matrix.branch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        branch:
+          - release/bi-1.8.x
+          - release/bi-1.9.x
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: release/bi-1.8.x
+          ref: ${{ matrix.branch }}
 
       - name: Setup Rush
         uses: gigara/setup-rush@v1.2.0
@@ -107,36 +124,15 @@ jobs:
           echo "fileName=$file" >> "$GITHUB_OUTPUT"
           echo "Built VSIX: $file"
 
-      - name: Upload VSIX artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ballerina-daily-vsix
-          path: ${{ steps.vsix.outputs.fileName }}
-          retention-days: 30
-
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      vsixFileName: ${{ steps.vsix.outputs.fileName }}
-      integratorBranch: ${{ steps.integrator-config.outputs.branch }}
-
-  Release:
-    name: Create GitHub Release
-    needs: Build
-    if: ${{ github.repository == 'wso2/vscode-extensions' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Download VSIX artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: ballerina-daily-vsix
-
       - name: Create release on wso2/ballerina-vscode
+        if: ${{ github.repository == 'wso2/vscode-extensions' }}
         env:
           GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
         run: |
-          TAG="ballerina-v${{ needs.Build.outputs.version }}"
-          RELEASE_NAME="Ballerina Extension Daily Build v${{ needs.Build.outputs.version }}"
-          VSIX_FILE="${{ needs.Build.outputs.vsixFileName }}"
+          TAG="ballerina-v${{ steps.version.outputs.version }}"
+          RELEASE_NAME="Ballerina Extension Daily Build v${{ steps.version.outputs.version }}"
+          VSIX_FILE="${{ steps.vsix.outputs.fileName }}"
+          BRANCH="${{ matrix.branch }}"
 
           # Delete existing release with same tag if it exists
           existing_id=$(curl -s -H "Accept: application/vnd.github.v3+json" \
@@ -159,7 +155,7 @@ jobs:
           # Create new release
           createResponse=$(curl -s -X POST -H "Accept: application/vnd.github.v3+json" \
             -H "Authorization: token $GH_TOKEN" \
-            -d "{\"tag_name\":\"$TAG\", \"name\": \"$RELEASE_NAME\", \"draft\":false, \"prerelease\":true, \"body\": \"Automated daily build from release/bi-1.8.x branch.\"}" \
+            -d "{\"tag_name\":\"$TAG\", \"name\": \"$RELEASE_NAME\", \"draft\":false, \"prerelease\":true, \"body\": \"Automated daily build from ${BRANCH} branch.\"}" \
             "https://api.github.com/repos/wso2/ballerina-vscode/releases")
 
           releaseId=$(echo "$createResponse" | jq -r '.id')
@@ -189,25 +185,19 @@ jobs:
             exit 1
           fi
 
-  UpdateProductIntegrator:
-    name: Update product-integrator version
-    needs: [Build, Release]
-    if: ${{ success() && github.repository == 'wso2/vscode-extensions' && needs.Build.outputs.integratorBranch != '' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout product-integrator
-        uses: actions/checkout@v4
-        with:
-          repository: wso2/product-integrator
-          ref: ${{ needs.Build.outputs.integratorBranch }}
-          token: ${{ secrets.CHOREO_BOT_TOKEN }}
-
-      - name: Update ballerina.extension.version
+      - name: Update product-integrator version
+        if: ${{ github.repository == 'wso2/vscode-extensions' && steps.integrator-config.outputs.branch != '' }}
         env:
-          NEW_VERSION: ${{ needs.Build.outputs.version }}
-          INTEGRATOR_BRANCH: ${{ needs.Build.outputs.integratorBranch }}
+          NEW_VERSION: ${{ steps.version.outputs.version }}
+          INTEGRATOR_BRANCH: ${{ steps.integrator-config.outputs.branch }}
           GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
         run: |
+          # Clone product-integrator into a temp directory
+          TEMP_DIR=$(mktemp -d)
+          git clone --depth 1 --branch "$INTEGRATOR_BRANCH" \
+            "https://x-access-token:${GH_TOKEN}@github.com/wso2/product-integrator.git" "$TEMP_DIR"
+          cd "$TEMP_DIR"
+
           PROPERTIES_FILE="ci/build/component-versions.properties"
           BRANCH_NAME="update-bal-ext-version-${NEW_VERSION}"
 
@@ -249,13 +239,8 @@ jobs:
             exit 1
           fi
 
-  NotifySuccess:
-    name: Notify Success
-    needs: [Build, Release]
-    if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Release Notification
+      - name: Success Notification
+        if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
         run: |
           body=$(cat << 'EOF'
           {
@@ -270,15 +255,15 @@ jobs:
                     "widgets": [
                       {
                         "keyValue": {
-                          "topLabel": "Ballerina Extension",
-                          "content": "v${{ needs.Build.outputs.version }}",
+                          "topLabel": "Ballerina Extension (${{ matrix.branch }})",
+                          "content": "v${{ steps.version.outputs.version }}",
                           "iconUrl": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/Visual_Studio_Code_1.35_icon.svg/512px-Visual_Studio_Code_1.35_icon.svg.png",
                           "button": {
                             "textButton": {
                               "text": "Download VSIX",
                               "onClick": {
                                 "openLink": {
-                                  "url": "https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v${{ needs.Build.outputs.version }}"
+                                  "url": "https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v${{ steps.version.outputs.version }}"
                                 }
                               }
                             }
@@ -301,13 +286,11 @@ jobs:
 
   NotifyFailure:
     name: Notify Failure
-    needs: [Build, Release, UpdateProductIntegrator]
+    needs: [Build-and-Release]
     if: ${{ always() && contains(needs.*.result, 'failure') && github.repository == 'wso2/vscode-extensions' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: release/bi-1.8.x
       - name: Failure Notification
         uses: ./.github/actions/failure-notification
         with:
