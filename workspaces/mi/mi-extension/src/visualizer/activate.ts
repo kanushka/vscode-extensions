@@ -679,7 +679,7 @@ async function handleConflictingCAppArtifacts(
     // Note: local dependency model uses `artifact` for the artifact ID field,
     // while the server response uses `artifactId` — these map to the same concept.
     const dependenciesToRemove = conflictingDeps
-        .map(cd => allExistingDeps.find((dep: any) =>
+        .flatMap(cd => allExistingDeps.filter((dep: any) =>
             dep.groupId === cd.groupId &&
             dep.artifact === cd.artifactId &&
             dep.version === cd.version
