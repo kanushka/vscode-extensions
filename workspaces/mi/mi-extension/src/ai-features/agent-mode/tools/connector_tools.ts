@@ -33,6 +33,7 @@ import {
     getInboundInfoFromLS,
     getLocalInboundCatalog,
     readOutputSchema,
+    readOutputSchemaFile,
     LSConnectorResult,
     LSInboundResult,
     LocalInboundCatalogEntry,
@@ -337,14 +338,22 @@ async function buildLSOperationDetails(
         //  3. action does NOT declare an outputSchemaPath → use placeholder (legacy/operation-style connectors)
         let outputSchema: any = NO_OUTPUT_SCHEMA_PLACEHOLDER;
         if (action.outputSchemaPath) {
-            const parsed = await readOutputSchema(
-                lsResult.outputSchemaPath || '',
-                action.name
-            );
+            // Prefer the operation's own outputSchemaPath when set — it's a full
+            // file path to the per-operation schema. Falling back to the
+            // connector-level directory + <action.name>.json only covers
+            // connectors that follow the default layout; some connectors ship
+            // schemas at non-standard locations.
+            let parsed = await readOutputSchemaFile(action.outputSchemaPath);
+            if (parsed === null) {
+                parsed = await readOutputSchema(
+                    lsResult.outputSchemaPath || '',
+                    action.name
+                );
+            }
             if (parsed !== null) {
                 outputSchema = flattenOutputSchema(parsed) ?? NO_OUTPUT_SCHEMA_PLACEHOLDER;
             } else {
-                logWarn(`[ConnectorTool] Output schema declared for '${name}.${action.name}' but could not be read at '${lsResult.outputSchemaPath}/${action.name}.json'`);
+                logWarn(`[ConnectorTool] Output schema declared for '${name}.${action.name}' but could not be read at '${action.outputSchemaPath}' or '${lsResult.outputSchemaPath}/${action.name}.json'`);
             }
         }
 

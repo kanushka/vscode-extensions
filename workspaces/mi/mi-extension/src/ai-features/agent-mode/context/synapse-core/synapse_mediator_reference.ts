@@ -706,7 +706,7 @@ Response caching for outbound calls. Paired request/response: one \`<cache>\` in
 - \`<onCacheHit [sequence="..."]>...</onCacheHit>\` — inline mediators OR \`sequence="name"\`. Run on hit instead of backend call. Typically ends with \`<respond/>\`.
 - \`<protocol type="HTTP">\`
   - \`<methods>GET POST</methods>\` — methods eligible for caching
-  - \`<headersToExcludeInHash>Authorization, Date</headersToExcludeInHash>\` — request headers ignored when computing the hash
+  - \`<headersToExcludeInHash>Date</headersToExcludeInHash>\` — request headers ignored when computing the hash. List only volatile headers (Date, X-Request-Id) here; **never** identity headers (Authorization, Cookie, X-User-*) or responses will collide across users.
   - \`<responseCodes>2\\d\\d</responseCodes>\` — regex of response codes to cache
   - \`<enableCacheControl>true</enableCacheControl>\` — honor \`Cache-Control: no-cache/max-age\`
   - \`<includeAgeHeader>true</includeAgeHeader>\` — add \`Age\` header on cached responses
@@ -759,7 +759,7 @@ call_send_loopback: `## \`<call>\` vs \`<send>\` vs \`<loopback/>\` — Flow Sem
 - \`<send/>\` (no endpoint child) — sends to the endpoint implied by \`To\` header / WS-Addressing. Used in out-sequences to forward the response back to the client.
 - After \`<send>\`, mediators **in the same sequence** still execute (the send thread doesn't block), but any payload they operate on is the request, not the response.
 
-### \`<call [blocking="false"] [initAxis2ClientOptions="false"]>\` — synchronous request/reply
+### \`<call [blocking="false"]>\` — synchronous request/reply
 \`\`\`xml
 <call>
   <endpoint key="BackendEP"/>
@@ -767,7 +767,7 @@ call_send_loopback: `## \`<call>\` vs \`<send>\` vs \`<loopback/>\` — Flow Sem
 <!-- After <call>: payload is the response body -->
 \`\`\`
 - Mediators after \`<call>\` see the backend response as \`\${payload}\` (or nothing if the endpoint is one-way).
-- \`blocking="true"\` switches to a blocking IO path — required only for legacy transports.
+- \`blocking="true"\` switches to a blocking IO path — required only for legacy transports. Only when \`blocking="true"\` is \`initAxis2ClientOptions="false"\` meaningful (it suppresses re-initialization of the Axis2 client options for the blocking call). Do NOT set \`initAxis2ClientOptions\` on a non-blocking \`<call>\`; it has no effect there.
 - Connector operations (\`http.get\`, etc.) are internally \`<call>\`-shaped; after the connector the response is in \`\${payload}\` or \`\${vars.<responseVariable>}\`.
 
 ### \`<loopback/>\` — proxy-only out-sequence transition

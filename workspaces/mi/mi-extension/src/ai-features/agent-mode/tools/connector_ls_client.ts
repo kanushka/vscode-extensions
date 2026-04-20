@@ -267,11 +267,27 @@ export async function getInboundInfoFromLS(
 }
 
 /**
- * Read the output schema JSON for a specific operation from disk.
- * Returns null if the file doesn't exist or can't be parsed — callers decide
- * whether that's a bug worth logging or just a legacy connector without
- * per-action schemas.
+ * Read an output schema JSON from a direct file path. Used when an operation
+ * declares its own `outputSchemaPath` (a full path to the schema file) — in
+ * that case we should NOT re-derive the path from the connector-level dir +
+ * operation name.
  */
+export async function readOutputSchemaFile(filePath: string): Promise<any | null> {
+    if (!filePath) {
+        return null;
+    }
+    try {
+        const content = await fs.promises.readFile(filePath, 'utf-8');
+        return JSON.parse(content);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+            return null;
+        }
+        logDebug(`[ConnectorLSClient] Failed to read output schema file '${filePath}': ${error instanceof Error ? error.message : String(error)}`);
+        return null;
+    }
+}
+
 export async function readOutputSchema(
     outputSchemaDir: string,
     operationName: string
@@ -279,7 +295,16 @@ export async function readOutputSchema(
     if (!outputSchemaDir) {
         return null;
     }
-    const schemaPath = path.join(outputSchemaDir, `${operationName}.json`);
+    // Defense in depth: operationName comes from the LS response, but a
+    // malformed or malicious name like "../../etc/passwd" would escape the
+    // schema directory. Reduce to basename and verify containment before reading.
+    const safeName = path.basename(`${operationName}.json`);
+    const resolvedDir = path.resolve(outputSchemaDir);
+    const schemaPath = path.resolve(resolvedDir, safeName);
+    if (schemaPath !== resolvedDir && !schemaPath.startsWith(resolvedDir + path.sep)) {
+        logDebug(`[ConnectorLSClient] Refusing to read output schema outside '${resolvedDir}' for '${operationName}'`);
+        return null;
+    }
     try {
         // Use non-blocking fs; catch ENOENT as "no schema for this op" (legacy
         // connectors simply don't ship per-action schemas).
@@ -324,7 +349,10 @@ export async function getLocalInboundCatalog(projectPath: string): Promise<Local
                 continue;
             }
             const description = typeof e?.description === 'string' ? e.description : undefined;
-            if (e?.type === 'builtin-inbound-endpoint') {
+            // Accept both spellings defensively: `getLocalInboundConnectors` documents
+            // "builtin-inbound-endpoint", while `getInboundInfo` uses "inbuilt-inbound-endpoint".
+            // If the LS ever aligns the two, this stays correct either way.
+            if (e?.type === 'builtin-inbound-endpoint' || e?.type === 'inbuilt-inbound-endpoint') {
                 bundled.push({ id, name, description, type: 'bundled' });
             } else {
                 // 'inbound-endpoint' plus any future custom categorization

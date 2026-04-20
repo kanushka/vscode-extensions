@@ -367,7 +367,6 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
         agentMode,
         setAgentMode,
         isThinkingEnabled,
-        isMemoryEnabled,
         modelSettings,
         currentSessionId,
     } = useMICopilotContext();
@@ -1228,7 +1227,6 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
                 files,
                 images,
                 thinking: isThinkingEnabled,
-                memoryEnabled: isMemoryEnabled,
                 webAccessPreapproved: isWebAccessEnabled,
                 chatHistory: chatHistory,
                 modelSettings,

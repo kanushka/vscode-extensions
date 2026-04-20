@@ -189,10 +189,12 @@ export function AICodeGenerator({ isUsageExceeded = false }: AICodeGeneratorProp
                       </div>
                   </main>
 
-                  {!isAtBottom && backendRequestTriggered && (
+                  {!isAtBottom && (
                       <button
+                          type="button"
                           onClick={handleJumpToLatest}
                           title="Jump to latest"
+                          aria-label="Jump to latest messages"
                           style={{
                               position: "absolute",
                               bottom: 12,

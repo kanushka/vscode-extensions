@@ -89,6 +89,37 @@ function normalizeDeepWikiContent(content: unknown): string {
     return textBlocks.join('\n\n').trim();
 }
 
+/**
+ * Race a promise against an AbortSignal so long-running async work (MCP
+ * handshake, tool discovery) can be interrupted immediately when the user
+ * aborts. The abort listener is cleaned up whether the promise resolves,
+ * rejects, or the signal fires first.
+ */
+function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+    if (!signal) {
+        return promise;
+    }
+    if (signal.aborted) {
+        return Promise.reject(Object.assign(new Error('DeepWiki request aborted.'), { name: 'AbortError' }));
+    }
+    return new Promise<T>((resolve, reject) => {
+        const onAbort = () => {
+            reject(Object.assign(new Error('DeepWiki request aborted.'), { name: 'AbortError' }));
+        };
+        signal.addEventListener('abort', onAbort, { once: true });
+        promise.then(
+            (value) => {
+                signal.removeEventListener('abort', onAbort);
+                resolve(value);
+            },
+            (err) => {
+                signal.removeEventListener('abort', onAbort);
+                reject(err);
+            }
+        );
+    });
+}
+
 function toToolResult(output: any): ToolResult {
     const message = normalizeDeepWikiContent(output?.content)
         || (output?.structuredContent ? JSON.stringify(output.structuredContent, null, 2) : '')
@@ -147,21 +178,29 @@ export function createDeepWikiExecute(mainAbortSignal?: AbortSignal): DeepWikiAs
         let client: any;
         try {
             logInfo('[DeepWikiTool] Querying DeepWiki MCP server');
-            client = await createMCPClient({
-                transport: {
-                    type: 'http',
-                    url: DEEPWIKI_MCP_URL,
-                    redirect: 'error',
-                },
-            });
-
-            const tools = await client.tools({
-                schemas: {
-                    [DEEPWIKI_MCP_TOOL_NAME]: {
-                        inputSchema: deepWikiQuestionSchema,
+            // raceWithAbort ensures the MCP handshake and tool discovery cancel
+            // immediately on user abort, rather than blocking on network IO.
+            client = await raceWithAbort(
+                createMCPClient({
+                    transport: {
+                        type: 'http',
+                        url: DEEPWIKI_MCP_URL,
+                        redirect: 'error',
                     },
-                },
-            });
+                }),
+                mainAbortSignal
+            );
+
+            const tools = await raceWithAbort(
+                client.tools({
+                    schemas: {
+                        [DEEPWIKI_MCP_TOOL_NAME]: {
+                            inputSchema: deepWikiQuestionSchema,
+                        },
+                    },
+                }),
+                mainAbortSignal
+            );
 
             const askQuestionTool = (tools as Record<string, any>)[DEEPWIKI_MCP_TOOL_NAME];
             if (!askQuestionTool || typeof askQuestionTool.execute !== 'function') {
@@ -183,6 +222,14 @@ export function createDeepWikiExecute(mainAbortSignal?: AbortSignal): DeepWikiAs
             }
             return result;
         } catch (error: any) {
+            if (error?.name === 'AbortError' || mainAbortSignal?.aborted) {
+                logDebug('[DeepWikiTool] DeepWiki query aborted by user');
+                return {
+                    success: false,
+                    message: 'DeepWiki query aborted.',
+                    error: 'DEEPWIKI_ABORTED',
+                };
+            }
             logError('[DeepWikiTool] DeepWiki query failed', error);
             return {
                 success: false,

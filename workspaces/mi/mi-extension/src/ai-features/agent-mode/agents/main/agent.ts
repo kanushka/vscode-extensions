@@ -21,7 +21,6 @@
 // ============================================================================
 export const ENABLE_LANGFUSE = false; // Set to false to disable Langfuse tracing
 export const ENABLE_DEVTOOLS = false; // Set to true to enable AI SDK DevTools (local development only!)
-export const ENABLE_MEMORY_TOOL = false; // Set to true to enable Anthropic native memory tool (persistent project-scoped memory across sessions)
 export const ENABLE_NATIVE_COMPACTION = true; // Set to true to enable Anthropic native server-side compaction (auto-summarizes when context grows large)
 
 // Native compaction trigger threshold in tokens.
@@ -31,7 +30,7 @@ const NATIVE_COMPACTION_TRIGGER_TOKENS = 200000;
 
 import { ModelMessage, streamText, stepCountIs, UserModelMessage, SystemModelMessage, wrapLanguageModel } from 'ai';
 import { AnthropicProviderOptions } from '@ai-sdk/anthropic';
-import { getAnthropicClient, getAnthropicClientForCustomModel, getAnthropicProvider, AnthropicModel, resolveMainModelId } from '../../../connection';
+import { getAnthropicClient, getAnthropicClientForCustomModel, AnthropicModel, resolveMainModelId } from '../../../connection';
 import { getSystemPrompt } from '../main/system';
 import { getUserPrompt, UserPromptParams, UserPromptContentBlock } from './prompt';
 import { addCacheControlToMessages } from '../../../cache-utils';
@@ -43,8 +42,6 @@ import {
     PendingPlanApproval,
 } from '../../tools/plan_mode_tools';
 import { getRuntimeVersionFromPom } from '../../tools/connector_store_cache';
-import { createMemoryExecute, createReadOnlyMemoryExecute } from '../../tools/memory_tools';
-import { getCopilotProjectMemoriesDir } from '../../storage-paths';
 import {
     createAgentTools,
     FILE_WRITE_TOOL_NAME,
@@ -123,8 +120,6 @@ export interface AgentRequest {
     images?: ImageObject[];
     /** Enable Claude thinking mode (reasoning blocks) */
     thinking?: boolean;
-    /** Enable persistent cross-session memory tool */
-    memoryEnabled?: boolean;
     /** Skip per-call web approval prompts when true */
     webAccessPreapproved?: boolean;
     /** Path to the MI project */
@@ -445,9 +440,6 @@ export async function executeAgent(
         logInfo(`[Agent] Runtime version detected: ${runtimeVersion ?? 'unknown'}`);
         const systemPromptSelection = getSystemPrompt(runtimeVersion);
 
-        // Resolve memory setting early — needed for both system prompt and tool registration.
-        const memoryEnabled = request.memoryEnabled ?? ENABLE_MEMORY_TOOL;
-
         // System message (cache control will be added dynamically by prepareStep)
         // Adding a cache block here because tools + system would be same for all users who use our proxy.
         // 1h TTL: system prompt is stable per-session; via proxy it's cross-user-warm (shared org),
@@ -566,29 +558,7 @@ export async function executeAgent(
             modelSettings: request.modelSettings,
         });
 
-        // Add Anthropic native provider tools (memory).
-        // tool_search is now a local tool in createAgentTools — no provider dependency.
-        let finalTools: any = tools;
-        const anthropicProvider = memoryEnabled ? await getAnthropicProvider() : null;
-
-        // Memory tool: project-scoped persistent memory across sessions.
-        // Claude auto-checks /memories at the start of each turn (built-in protocol).
-        // Controlled by user setting (default off) or hardcoded flag for development.
-        if (memoryEnabled && anthropicProvider) {
-            const memoriesDir = getCopilotProjectMemoriesDir(request.projectPath);
-            const mode = request.mode || 'edit';
-            const baseExecute = createMemoryExecute(memoriesDir);
-            const memoryExecute = (mode === 'ask' || mode === 'plan')
-                ? createReadOnlyMemoryExecute(baseExecute)
-                : baseExecute;
-            finalTools = {
-                ...finalTools,
-                memory: anthropicProvider.tools.memory_20250818({
-                    execute: memoryExecute,
-                }),
-            };
-            logInfo(`[Agent] Memory tool enabled (mode=${mode}), dir: ${memoriesDir}`);
-        }
+        const finalTools: any = tools;
 
         // Track step number for logging
         let currentStepNumber = 0;

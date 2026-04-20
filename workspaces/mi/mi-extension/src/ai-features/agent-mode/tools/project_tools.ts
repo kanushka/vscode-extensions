@@ -25,7 +25,7 @@ import { DependencyDetails } from '@wso2/mi-core';
 import { logDebug, logError } from '../../copilot/logger';
 import { AgentUndoCheckpointManager } from '../undo/checkpoint-manager';
 import { lookupConnectorFromCache } from './connector_store_cache';
-import { ensureOperationNotAborted } from './abort-utils';
+import { ensureOperationNotAborted, isOperationAbortedError } from './abort-utils';
 import { CONNECTOR_DB } from '../context/connectors/connector_db';
 import { INBOUND_DB } from '../context/connectors/inbound_db';
 import {
@@ -221,7 +221,8 @@ export function createManageConnectorExecute(
                     isAdd,
                     operation,
                     toolName,
-                    versionOverride
+                    versionOverride,
+                    mainAbortSignal
                 );
                 results.push(result);
             }
@@ -325,9 +326,11 @@ async function processItem(
     isAdd: boolean,
     operation: 'add' | 'remove',
     toolName: string,
-    versionOverride: string | undefined
+    versionOverride: string | undefined,
+    mainAbortSignal: AbortSignal | undefined
 ): Promise<ProcessItemResult> {
     try {
+        ensureOperationNotAborted(mainAbortSignal, `processing ${itemType} ${itemName}`);
         if (!dbEntry) {
             return {
                 name: itemName,
@@ -361,6 +364,7 @@ async function processItem(
         // just because the store/cache has no latestVersion (offline, new runtime
         // version without a catalog, etc.). Try 'pom' first as a best-effort, then
         // fall back to latestVersion, then to an empty placeholder.
+        ensureOperationNotAborted(mainAbortSignal, `resolving version for ${itemName}`);
         let resolved: ResolvedVersion;
         try {
             if (isAdd) {
@@ -420,6 +424,7 @@ async function processItem(
 
         logDebug(`[${toolName}] ${isAdd ? 'Adding' : 'Removing'} ${itemType}: ${itemName} (${mavenArtifactId}:${resolved.version}, source: ${resolved.source})`);
 
+        ensureOperationNotAborted(mainAbortSignal, `updating pom.xml for ${itemName}`);
         // Update pom.xml
         const response = await miVisualizerRpcManager.updateAiDependencies({
             dependencies,
@@ -443,6 +448,12 @@ async function processItem(
             };
         }
     } catch (error) {
+        // Never swallow user-initiated aborts — let them propagate so the
+        // overall tool call terminates instead of silently marking the item
+        // as failed.
+        if (isOperationAbortedError(error)) {
+            throw error;
+        }
         return {
             name: itemName,
             type: itemType,

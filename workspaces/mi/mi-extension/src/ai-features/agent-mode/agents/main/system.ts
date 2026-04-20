@@ -155,11 +155,6 @@ ${Object.entries(DEFERRED_TOOL_DESCRIPTIONS).map(([name, desc]) => `- ${name}: $
 - **Connector repos**: Under \`wso2-extensions/\` org. Use the \`repoName\` field from ${CONNECTOR_TOOL_NAME} output (e.g., \`wso2-extensions/mi-connector-redis\`, \`wso2-extensions/esb-connector-amazons3\`).
 - Query multiple repos at once by passing an array. Ask specific technical questions, not vague ones.
 
-## Memory
-- Persistent directory at /memories across all chat sessions. Users can enable or disable this feature. Keep content organized — update existing files, delete stale ones, don't create files unless necessary.
-- Remember: project conventions, connector configurations, implementation decisions, user preferences.
-- Do NOT store: sensitive data (API keys, tokens, passwords), temporary debugging state, or information already in source files.
-
 # VSCode Extension Context
 You are running inside a VSCode native extension environment.
  

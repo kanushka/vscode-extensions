@@ -250,6 +250,29 @@ function validateFilePathSecurity(
         };
     }
 
+    // Realpath-based denylist runs for BOTH read and write modes — otherwise a
+    // symlink in an `allowOutside` read would exfiltrate credentials while the
+    // lexical check above passes. The containment check (isPathWithin /
+    // isCopilotGlobalPath) is still restricted to write/strict mode because
+    // reads may legitimately traverse outside the project tree.
+    let realTargetForChecks: string | undefined;
+    try {
+        if (fs.existsSync(fullPath)) {
+            realTargetForChecks = fs.realpathSync(fullPath);
+            if (isSensitiveTokenName(realTargetForChecks)) {
+                return {
+                    valid: false,
+                    error: 'Access to sensitive credential paths (SSH keys, cloud credentials, .env files, shell rc files) is not allowed.'
+                };
+            }
+        }
+    } catch {
+        return {
+            valid: false,
+            error: 'File path could not be resolved (broken symlink or permission error).'
+        };
+    }
+
     if (!allowOutside) {
         if (!isPathWithin(projectPath, fullPath) && !isCopilotGlobalPath(fullPath)) {
             return {
@@ -258,32 +281,23 @@ function validateFilePathSecurity(
             };
         }
 
-        // Symlink protection: resolve real path and re-check containment + denylist.
-        // The sensitive-path denylist must apply to the resolved target too, otherwise
-        // a symlink inside the project can still exfiltrate SSH keys / cloud creds /
-        // .env files from the user's home dir.
-        try {
-            if (fs.existsSync(fullPath)) {
-                const realTarget = fs.realpathSync(fullPath);
+        // Symlink protection: re-check containment against the realpath we
+        // already resolved above (avoids a second fs.realpathSync call).
+        if (realTargetForChecks !== undefined) {
+            try {
                 const realProject = fs.realpathSync(projectPath);
-                if (!isPathWithin(realProject, realTarget) && !isCopilotGlobalPath(realTarget)) {
+                if (!isPathWithin(realProject, realTargetForChecks) && !isCopilotGlobalPath(realTargetForChecks)) {
                     return {
                         valid: false,
                         error: 'File path resolves via symlink to a location outside the project.'
                     };
                 }
-                if (isSensitiveTokenName(realTarget)) {
-                    return {
-                        valid: false,
-                        error: 'Access to sensitive credential paths (SSH keys, cloud credentials, .env files, shell rc files) is not allowed.'
-                    };
-                }
+            } catch {
+                return {
+                    valid: false,
+                    error: 'File path could not be resolved (broken symlink or permission error).'
+                };
             }
-        } catch {
-            return {
-                valid: false,
-                error: 'File path could not be resolved (broken symlink or permission error).'
-            };
         }
     }
 
