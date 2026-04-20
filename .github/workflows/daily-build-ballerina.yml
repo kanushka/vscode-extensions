@@ -1,0 +1,278 @@
+name: Ballerina Daily Build - Release Branch
+
+on:
+  schedule:
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+
+jobs:
+  Build:
+    name: Build Ballerina Extension
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/bi-1.8.x
+
+      - name: Setup Rush
+        uses: gigara/setup-rush@v1.2.0
+        with:
+          pnpm: 10.10.0
+          node: 22.x
+          cache-rush: true
+          cache-pnpm: true
+
+      - name: Compute version
+        id: version
+        run: |
+          currentVersion=$(node -p "require('./workspaces/ballerina/ballerina-extension/package.json').version")
+          majorMinor=$(echo "$currentVersion" | cut -d'.' -f1,2)
+          datePatch=$(date '+%y%m%d')
+          newVersion="${majorMinor}.${datePatch}-snapshot"
+          echo "version=$newVersion" >> $GITHUB_OUTPUT
+          echo "Computed version: $newVersion"
+
+      - name: Update extension version
+        run: |
+          cd workspaces/ballerina/ballerina-extension
+          npm version ${{ steps.version.outputs.version }} --no-git-tag-version
+
+      - name: Copy .env.example to .env
+        run: |
+          find . -type f -name ".env.example" | while read example; do
+            envfile="$(dirname "$example")/.env"
+            cp "$example" "$envfile"
+          done
+
+      - name: Build Ballerina extension
+        run: node common/scripts/install-run-rush.js build -t ballerina --verbose
+        env:
+          isPreRelease: true
+
+      - name: Get VSIX file name
+        id: vsix
+        run: |
+          # postRushBuild copies VSIX to root; fallback to manual copy if not found
+          shopt -s nullglob
+          files=(ballerina-*.vsix)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "VSIX not found at root, copying manually..."
+            cp workspaces/ballerina/ballerina-extension/vsix/*.vsix ./ 2>/dev/null || true
+            files=(ballerina-*.vsix)
+          fi
+          if [ ${#files[@]} -ne 1 ]; then
+            echo "Expected exactly one Ballerina VSIX, found ${#files[@]}:"
+            printf ' - %s\n' "${files[@]}"
+            exit 1
+          fi
+          file="${files[0]}"
+          echo "fileName=$file" >> "$GITHUB_OUTPUT"
+          echo "Built VSIX: $file"
+
+      - name: Upload VSIX artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ballerina-daily-vsix
+          path: ${{ steps.vsix.outputs.fileName }}
+          retention-days: 30
+
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      vsixFileName: ${{ steps.vsix.outputs.fileName }}
+
+  Release:
+    name: Create GitHub Release
+    needs: Build
+    if: ${{ github.repository == 'wso2/vscode-extensions' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ballerina-daily-vsix
+
+      - name: Create release on wso2/ballerina-vscode
+        env:
+          GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
+        run: |
+          TAG="ballerina-v${{ needs.Build.outputs.version }}"
+          RELEASE_NAME="Ballerina Extension Daily Build v${{ needs.Build.outputs.version }}"
+          VSIX_FILE="${{ needs.Build.outputs.vsixFileName }}"
+
+          # Delete existing release with same tag if it exists
+          existing_id=$(curl -s -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token $GH_TOKEN" \
+            "https://api.github.com/repos/wso2/ballerina-vscode/releases/tags/$TAG" \
+            | jq -r '.id // empty')
+
+          if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
+            echo "Deleting existing release $existing_id for tag $TAG"
+            curl -s -X DELETE -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/wso2/ballerina-vscode/releases/$existing_id"
+
+            # Also delete the tag
+            curl -s -X DELETE -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: token $GH_TOKEN" \
+              "https://api.github.com/repos/wso2/ballerina-vscode/git/refs/tags/$TAG" || true
+          fi
+
+          # Create new release
+          createResponse=$(curl -s -X POST -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token $GH_TOKEN" \
+            -d "{\"tag_name\":\"$TAG\", \"name\": \"$RELEASE_NAME\", \"draft\":false, \"prerelease\":true, \"body\": \"Automated daily build from release/bi-1.8.x branch.\"}" \
+            "https://api.github.com/repos/wso2/ballerina-vscode/releases")
+
+          releaseId=$(echo "$createResponse" | jq -r '.id')
+          echo "Created release ID: $releaseId"
+
+          if [ -z "$releaseId" ] || [ "$releaseId" == "null" ]; then
+            echo "Failed to create release"
+            echo "$createResponse"
+            exit 1
+          fi
+
+          # Upload VSIX asset
+          uploadResponse=$(curl -sS -w "\n%{http_code}" -X POST \
+            -H "Authorization: token $GH_TOKEN" \
+            -H "Content-Type: application/octet-stream" \
+            --data-binary @"$VSIX_FILE" \
+            "https://uploads.github.com/repos/wso2/ballerina-vscode/releases/$releaseId/assets?name=$VSIX_FILE")
+
+          httpCode=$(echo "$uploadResponse" | tail -1)
+          responseBody=$(echo "$uploadResponse" | sed '$d')
+
+          if [ "$httpCode" -ge 200 ] && [ "$httpCode" -lt 300 ]; then
+            echo "Upload successful: $(echo "$responseBody" | jq -r '.name')"
+          else
+            echo "Upload failed with HTTP $httpCode"
+            echo "$responseBody"
+            exit 1
+          fi
+
+  UpdateProductIntegrator:
+    name: Update product-integrator version
+    needs: [Build, Release]
+    if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout product-integrator
+        uses: actions/checkout@v4
+        with:
+          repository: wso2/product-integrator
+          ref: 5.0.x
+          token: ${{ secrets.CHOREO_BOT_TOKEN }}
+
+      - name: Update ballerina.extension.version
+        env:
+          NEW_VERSION: ${{ needs.Build.outputs.version }}
+          GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
+        run: |
+          PROPERTIES_FILE="ci/build/component-versions.properties"
+          BRANCH_NAME="update-bal-ext-version-${NEW_VERSION}"
+
+          # Update the version property
+          sed -i "s/^ballerina\.extension\.version=.*/ballerina.extension.version=${NEW_VERSION}/" "$PROPERTIES_FILE"
+
+          echo "Updated $PROPERTIES_FILE:"
+          grep "ballerina.extension.version" "$PROPERTIES_FILE"
+
+          # Check if there are actual changes
+          if git diff --quiet; then
+            echo "No changes detected, skipping PR creation"
+            exit 0
+          fi
+
+          # Configure git
+          git config user.name "WSO2 Builder"
+          git config user.email "builder@wso2.com"
+
+          # Create branch, commit, and push
+          git checkout -b "$BRANCH_NAME"
+          git add "$PROPERTIES_FILE"
+          git commit -m "Update ballerina.extension.version to ${NEW_VERSION}"
+          git push origin "$BRANCH_NAME"
+
+          # Create PR
+          pr_response=$(curl -s -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token $GH_TOKEN" \
+            -d "{\"title\": \"Update ballerina.extension.version to ${NEW_VERSION}\", \"head\": \"${BRANCH_NAME}\", \"base\": \"5.0.x\", \"body\": \"Automated PR to update Ballerina extension version after daily build.\\n\\nRelease: https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v${NEW_VERSION}\"}" \
+            "https://api.github.com/repos/wso2/product-integrator/pulls")
+
+          pr_url=$(echo "$pr_response" | jq -r '.html_url // empty')
+          if [ -n "$pr_url" ] && [ "$pr_url" != "null" ]; then
+            echo "Created PR: $pr_url"
+          else
+            echo "Failed to create PR"
+            echo "$pr_response"
+            exit 1
+          fi
+
+  NotifySuccess:
+    name: Notify Success
+    needs: [Build, Release]
+    if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release Notification
+        run: |
+          body=$(cat << 'EOF'
+          {
+            "cards": [
+              {
+                "header": {
+                  "title": "Daily Build - Release Branch",
+                  "subtitle": "Ballerina Extension"
+                },
+                "sections": [
+                  {
+                    "widgets": [
+                      {
+                        "keyValue": {
+                          "topLabel": "Ballerina Extension",
+                          "content": "v${{ needs.Build.outputs.version }}",
+                          "iconUrl": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/Visual_Studio_Code_1.35_icon.svg/512px-Visual_Studio_Code_1.35_icon.svg.png",
+                          "button": {
+                            "textButton": {
+                              "text": "Download VSIX",
+                              "onClick": {
+                                "openLink": {
+                                  "url": "https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v${{ needs.Build.outputs.version }}"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+          EOF
+          )
+          curl \
+            -X POST \
+            -H 'Content-Type: application/json' \
+            "${{ secrets.BI_TEAM_CHAT_API }}" \
+            -d "$body"
+
+  NotifyFailure:
+    name: Notify Failure
+    needs: [Build, Release, UpdateProductIntegrator]
+    if: ${{ always() && contains(needs.*.result, 'failure') && github.repository == 'wso2/vscode-extensions' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: release/bi-1.8.x
+      - name: Failure Notification
+        uses: ./.github/actions/failure-notification
+        with:
+          title: "Daily Build - Release Branch Failed"
+          run_id: ${{ github.run_id }}
+          chat_api: ${{ secrets.TOOLING_TEAM_CHAT_API }}
+          repository: ${{ github.repository }}
