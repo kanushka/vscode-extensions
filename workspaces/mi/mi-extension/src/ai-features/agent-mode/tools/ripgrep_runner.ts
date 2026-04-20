@@ -62,6 +62,36 @@ let cachedRgPath: string | undefined;
 export const RG_EXCLUDED_DIRS = ['node_modules', '.git', '.devtools'] as const;
 
 /**
+ * Glob patterns (ripgrep negated globs) that exclude sensitive credential
+ * files and directories from grep/glob results. Mirrors the shell sandbox's
+ * denylist so the agent can't exfiltrate SSH keys, cloud credentials, or
+ * shell rc files via a search that happens to cross into the user's home dir.
+ */
+export const RG_EXCLUDED_SENSITIVE_GLOBS = [
+    '.ssh',
+    '.aws',
+    '.azure',
+    '.gnupg',
+    '.kube',
+    '.npm',
+    '.env',
+    '.env.*',
+    '.bashrc',
+    '.bash_profile',
+    '.zshrc',
+    '.zprofile',
+    '.profile',
+    '.netrc',
+    '.npmrc',
+    '.pypirc',
+    '.git-credentials',
+    'id_rsa',
+    'id_dsa',
+    'id_ecdsa',
+    'id_ed25519',
+] as const;
+
+/**
  * Resolves the path to a usable ripgrep binary. Resolution order:
  *   1. VS Code's bundled rg (the binary that powers the built-in search feature).
  *   2. MI_RG_PATH env var (developer override).

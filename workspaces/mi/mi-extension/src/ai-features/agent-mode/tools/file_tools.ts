@@ -50,7 +50,9 @@ import {
     parseRgCountOutput,
     validateRgTypeName,
     RG_EXCLUDED_DIRS,
+    RG_EXCLUDED_SENSITIVE_GLOBS,
 } from './ripgrep_runner';
+import { isSensitiveTokenName } from './shell_sandbox';
 
 // ============================================================================
 // Validation Functions
@@ -236,6 +238,17 @@ function validateFilePathSecurity(
     }
 
     const fullPath = resolveFullPath(projectPath, normalizedPath);
+
+    // Sensitive-path denylist applies even when `allowOutsideProject` is set —
+    // parity with the shell sandbox so read/grep/glob can't exfiltrate SSH
+    // keys, AWS credentials, `.env` files, shell rc files, etc. via a
+    // prompt-injected instruction.
+    if (isSensitiveTokenName(fullPath)) {
+        return {
+            valid: false,
+            error: 'Access to sensitive credential paths (SSH keys, cloud credentials, .env files, shell rc files) is not allowed.'
+        };
+    }
 
     if (!allowOutside) {
         if (!isPathWithin(projectPath, fullPath) && !isCopilotGlobalPath(fullPath)) {
@@ -1136,6 +1149,9 @@ export function createGrepExecute(projectPath: string): GrepExecuteFn {
         for (const dir of RG_EXCLUDED_DIRS) {
             rgArgs.push('--glob', `!${dir}`);
         }
+        for (const pat of RG_EXCLUDED_SENSITIVE_GLOBS) {
+            rgArgs.push('--glob', `!${pat}`);
+        }
         // Positional separator prevents a pattern starting with `-` from being parsed as a flag.
         rgArgs.push('--', pattern, fullSearchPath);
 
@@ -1300,6 +1316,9 @@ export function createGlobExecute(projectPath: string): GlobExecuteFn {
         ];
         for (const dir of RG_EXCLUDED_DIRS) {
             rgArgs.push('--glob', `!${dir}`);
+        }
+        for (const pat of RG_EXCLUDED_SENSITIVE_GLOBS) {
+            rgArgs.push('--glob', `!${pat}`);
         }
         rgArgs.push(fullSearchPath);
 

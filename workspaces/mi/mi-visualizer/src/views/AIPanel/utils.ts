@@ -79,7 +79,9 @@ export function splitHalfGeneratedCode(content: string) {
             if (match.index > lastIndex) {
                 segments.push({ isCode: false, loading: false, text: content.slice(lastIndex, match.index) });
             }
-            segments.push({ isCode: true, loading: true, text: match[0] });
+            // The regex's non-capturing group may consume a leading newline;
+            // strip it so identifyLanguage's startsWith('```') check works.
+            segments.push({ isCode: true, loading: true, text: match[0].replace(/^\r?\n/, '') });
             lastIndex = regex.lastIndex;
         }
 

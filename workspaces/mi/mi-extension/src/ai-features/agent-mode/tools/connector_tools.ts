@@ -237,7 +237,7 @@ function buildInitModeReminder(name: string, lsResult: LSConnectorResult): strin
     } else {
         body = `For this connector, inline init is required. Call <${id}.init> before using any connector operation. No localEntry required.`;
     }
-    return `<system-reminder>${body} Call get_connector_info with include_full_descriptions=true and specific operation_names for richer operation details before writing XML. Use add_or_remove_connector to add the connector to the project.</system-reminder>\n`;
+    return `<system-reminder>${body} Call get_connector_info with mode='details' and specific operation_names for richer operation details before writing XML. Use add_or_remove_connector to add the connector to the project.</system-reminder>\n`;
 }
 
 /**

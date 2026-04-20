@@ -369,6 +369,7 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
         isThinkingEnabled,
         isMemoryEnabled,
         modelSettings,
+        currentSessionId,
     } = useMICopilotContext();
 
     const [, setFileUploadStatus] = useState({ type: "", text: "" });
@@ -1316,6 +1317,13 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
             rpcClient.onAgentEvent(handleAgentEvent);
         }
     }, [rpcClient, handleAgentEvent]);
+
+    // Clear the interrupt guard when the active session changes so events
+    // streamed for the newly-switched session aren't dropped by a prior
+    // interrupt that belonged to a different session.
+    useEffect(() => {
+        abortedRef.current = false;
+    }, [currentSessionId]);
 
     // Restore in-progress/completed run state when the panel reconnects.
     useEffect(() => {

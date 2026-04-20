@@ -481,33 +481,36 @@ export async function lookupConnectorFromCache(
         }
     }
 
-    // 2. Cache miss or stale — fetch from store
-    for (const itemType of ['connector', 'inbound'] as ConnectorStoreItemType[]) {
+    // 2. Cache miss or stale — fetch both types in parallel from store (with
+    //    per-type stale-cache fallback on failure). We scan the full result
+    //    set for a match after both settle; connectors and inbounds don't
+    //    share names in practice, so the extra work is negligible.
+    const types: ConnectorStoreItemType[] = ['connector', 'inbound'];
+    const fetchResults = await Promise.all(types.map(async (itemType) => {
         const cachePath = buildCatalogFilePath(itemType, runtimeVersionUsed);
         try {
             const fetched = await fetchCatalogFromStore(itemType, runtimeVersionUsed);
             await writeCatalogCache(cachePath, itemType, runtimeVersionUsed, fetched);
-            const found = fetched.find(item => matchesStoreItem(item, name));
-            if (found) {
-                return { item: found, source: 'store' };
-            }
+            return { data: fetched, source: 'store' as ConnectorStoreSource };
         } catch {
-            // 3. Store failed — try stale cache
             const cached = await readCatalogCache(cachePath);
-            if (cached?.data) {
-                const found = cached.data.find(item => matchesStoreItem(item, name));
-                if (found) {
-                    return { item: found, source: 'stale-cache' };
-                }
-            }
+            return { data: cached?.data ?? [], source: 'stale-cache' as ConnectorStoreSource };
+        }
+    }));
+
+    for (const { data, source } of fetchResults) {
+        const found = data.find(item => matchesStoreItem(item, name));
+        if (found) {
+            return { item: found, source };
         }
     }
 
-    // 4. Final fallback: static DB
-    const normalizedInput = normalizeName(name);
-    const fullId = isFullArtifactId(normalizedInput);
-    const allFallback = [...fallbackConnectors, ...fallbackInbounds];
-    const dbMatch = allFallback.find(item => {
+    // 3. Final fallback: static DB. Check connectors and inbounds separately
+    //    so the correct itemType is threaded into toFallbackStoreItems (which
+    //    controls connectorType defaulting).
+    const matchesFallback = (item: any): boolean => {
+        const normalizedInput = normalizeName(name);
+        const fullId = isFullArtifactId(normalizedInput);
         const itemArtifact = normalizeName(item?.mavenArtifactId);
         if (fullId) {
             return normalizedInput === itemArtifact;
@@ -520,10 +523,17 @@ export async function lookupConnectorFromCache(
             || normalizedInput === itemArtifactStripped
             || stripped === itemName
             || stripped === itemArtifact;
-    });
+    };
 
-    if (dbMatch) {
-        const mapped = toFallbackStoreItems([dbMatch], 'connector')[0] ?? null;
+    const connectorMatch = fallbackConnectors.find(matchesFallback);
+    if (connectorMatch) {
+        const mapped = toFallbackStoreItems([connectorMatch], 'connector')[0] ?? null;
+        return { item: mapped, source: 'local-db' };
+    }
+
+    const inboundMatch = fallbackInbounds.find(matchesFallback);
+    if (inboundMatch) {
+        const mapped = toFallbackStoreItems([inboundMatch], 'inbound')[0] ?? null;
         return { item: mapped, source: 'local-db' };
     }
 
