@@ -1230,3 +1230,21 @@ export function updatePomWithParent(pomPath: string, parent: ParentPomInfo) {
     const updatedXml = builder.build(pom);
     fs.writeFileSync(pomPath, updatedXml);
 }
+
+export async function formatAndSavePomDocument(pomPath: string): Promise<void> {
+    const editorConfig = workspace.getConfiguration('editor');
+    const formattingOptions = {
+        tabSize: editorConfig.get("tabSize") ?? 4,
+        insertSpaces: editorConfig.get("insertSpaces") ?? false,
+        trimTrailingWhitespace: editorConfig.get("trimTrailingWhitespace") ?? false
+    };
+    const edits = await commands.executeCommand<TextEdit[]>(
+        "vscode.executeFormatDocumentProvider", Uri.file(pomPath), formattingOptions
+    );
+    if (edits && edits.length > 0) {
+        const formatEdit = new WorkspaceEdit();
+        formatEdit.set(Uri.file(pomPath), edits);
+        await workspace.applyEdit(formatEdit);
+        await workspace.openTextDocument(pomPath).then(doc => doc.save());
+    }
+}

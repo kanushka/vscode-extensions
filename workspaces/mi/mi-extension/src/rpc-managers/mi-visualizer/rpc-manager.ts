@@ -79,7 +79,7 @@ import { extension } from "../../MIExtensionContext";
 import { DebuggerConfig } from "../../debugger/config";
 import { history } from "../../history";
 import { getStateMachine, navigate, openView, refreshUI } from "../../stateMachine";
-import { goToSource, handleOpenFile, appendContent, selectFolderDialog } from "../../util/fileOperations";
+import { formatAndSavePomDocument, goToSource, handleOpenFile, appendContent, selectFolderDialog } from "../../util/fileOperations";
 import { openPopupView } from "../../stateMachinePopup";
 import { SwaggerServer } from "../../swagger/server";
 import { log, outputChannel } from "../../util/logger";
@@ -856,31 +856,16 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
             edit.replace(Uri.file(pomPath), range, content);
         }
-        const success = await workspace.applyEdit(edit);
-        // Make sure to save the document after applying the edits
-        if (success) {
-            const document = await workspace.openTextDocument(pomPath);
-            await document.save();
-            // Format the pom content
-            const editorConfig = workspace.getConfiguration('editor');
-            let formattingOptions = {
-                    tabSize: editorConfig.get("tabSize") ?? 4,
-                    insertSpaces: editorConfig.get("insertSpaces") ?? false,
-                    trimTrailingWhitespace: editorConfig.get("trimTrailingWhitespace") ?? false
-                };
-            const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>("vscode.executeFormatDocumentProvider",
-                            vscode.Uri.file(pomPath), formattingOptions);
-            if (edits && edits.length > 0) {
-                const edit = new vscode.WorkspaceEdit();
-                edit.set(vscode.Uri.file(pomPath), edits);
-                await vscode.workspace.applyEdit(edit);
-                await vscode.workspace.openTextDocument(pomPath).then(doc => doc.save());
-            }
-            if (getStateMachine(this.projectUri).context().view === MACHINE_VIEW.Overview) {
-                refreshUI(this.projectUri);
-            }
-        } else {
+        if (!await workspace.applyEdit(edit)) {
             throw new Error("Failed to apply edits to pom.xml");
+        }
+
+        const document = await workspace.openTextDocument(pomPath);
+        await document.save();
+        await formatAndSavePomDocument(pomPath);
+
+        if (getStateMachine(this.projectUri).context().view === MACHINE_VIEW.Overview) {
+            refreshUI(this.projectUri);
         }
     }
 

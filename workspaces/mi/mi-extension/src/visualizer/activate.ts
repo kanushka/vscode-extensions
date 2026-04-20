@@ -35,7 +35,7 @@ import { AiPanelWebview } from '../ai-features/webview';
 import { MiDiagramRpcManager } from '../rpc-managers/mi-diagram/rpc-manager';
 import { log } from '../util/logger';
 import { CACHED_FOLDER, INTEGRATION_PROJECT_DEPENDENCIES_DIR, isConsolidatedProject } from '../util/onboardingUtils';
-import { extractZip, getHash, zipProjectFolder } from '../util/fileOperations';
+import { extractZip, formatAndSavePomDocument, getHash, zipProjectFolder } from '../util/fileOperations';
 import { MILanguageClient } from '../lang-client/activator';
 import { ConflictingDependency } from '../lang-client/ExtendedLanguageClient';
 import { askForProject } from '../util/workspace';
@@ -615,24 +615,6 @@ export async function extractCAppDependenciesAsProjects(projectUri: string | und
         }
     } catch (error: any) {
         vscode.window.showErrorMessage(`Failed to load integration project dependencies: ${error.message}`);
-    }
-}
-
-async function formatAndSavePomDocument(pomPath: string): Promise<void> {
-    const editorConfig = workspace.getConfiguration('editor');
-    const formattingOptions = {
-        tabSize: editorConfig.get("tabSize") ?? 4,
-        insertSpaces: editorConfig.get("insertSpaces") ?? false,
-        trimTrailingWhitespace: editorConfig.get("trimTrailingWhitespace") ?? false
-    };
-    const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>(
-        "vscode.executeFormatDocumentProvider", Uri.file(pomPath), formattingOptions
-    );
-    if (edits && edits.length > 0) {
-        const formatEdit = new WorkspaceEdit();
-        formatEdit.set(Uri.file(pomPath), edits);
-        await workspace.applyEdit(formatEdit);
-        await workspace.openTextDocument(pomPath).then(doc => doc.save());
     }
 }
 
