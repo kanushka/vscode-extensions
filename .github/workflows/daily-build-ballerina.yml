@@ -151,6 +151,65 @@ jobs:
             exit 1
           fi
 
+  UpdateProductIntegrator:
+    name: Update product-integrator version
+    needs: [Build, Release]
+    if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout product-integrator
+        uses: actions/checkout@v4
+        with:
+          repository: wso2/product-integrator
+          ref: 5.0.x
+          token: ${{ secrets.CHOREO_BOT_TOKEN }}
+
+      - name: Update ballerina.extension.version
+        env:
+          NEW_VERSION: ${{ needs.Build.outputs.version }}
+          GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
+        run: |
+          PROPERTIES_FILE="ci/build/component-versions.properties"
+          BRANCH_NAME="update-bal-ext-version-${NEW_VERSION}"
+
+          # Update the version property
+          sed -i "s/^ballerina\.extension\.version=.*/ballerina.extension.version=${NEW_VERSION}/" "$PROPERTIES_FILE"
+
+          echo "Updated $PROPERTIES_FILE:"
+          grep "ballerina.extension.version" "$PROPERTIES_FILE"
+
+          # Check if there are actual changes
+          if git diff --quiet; then
+            echo "No changes detected, skipping PR creation"
+            exit 0
+          fi
+
+          # Configure git
+          git config user.name "WSO2 Builder"
+          git config user.email "builder@wso2.com"
+
+          # Create branch, commit, and push
+          git checkout -b "$BRANCH_NAME"
+          git add "$PROPERTIES_FILE"
+          git commit -m "Update ballerina.extension.version to ${NEW_VERSION}"
+          git push origin "$BRANCH_NAME"
+
+          # Create PR
+          pr_response=$(curl -s -X POST \
+            -H "Accept: application/vnd.github.v3+json" \
+            -H "Authorization: token $GH_TOKEN" \
+            -d "{\"title\": \"Update ballerina.extension.version to ${NEW_VERSION}\", \"head\": \"${BRANCH_NAME}\", \"base\": \"5.0.x\", \"body\": \"Automated PR to update Ballerina extension version after daily build.\\n\\nRelease: https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v${NEW_VERSION}\"}" \
+            "https://api.github.com/repos/wso2/product-integrator/pulls")
+
+          pr_url=$(echo "$pr_response" | jq -r '.html_url // empty')
+          if [ -n "$pr_url" ] && [ "$pr_url" != "null" ]; then
+            echo "Created PR: $pr_url"
+          else
+            echo "Failed to create PR"
+            echo "$pr_response"
+            exit 1
+          fi
+
   NotifySuccess:
     name: Notify Success
     needs: [Build, Release]
@@ -203,7 +262,7 @@ jobs:
 
   NotifyFailure:
     name: Notify Failure
-    needs: [Build, Release]
+    needs: [Build, Release, UpdateProductIntegrator]
     if: ${{ always() && contains(needs.*.result, 'failure') && github.repository == 'wso2/vscode-extensions' }}
     runs-on: ubuntu-latest
     steps:
