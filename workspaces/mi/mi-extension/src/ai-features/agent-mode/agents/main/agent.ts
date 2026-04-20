@@ -739,9 +739,10 @@ export async function executeAgent(
                         `Input: ${inputTokens} | Cache Read: ${cachedInputTokens} | ` +
                         `Output: ${outputTokens} | Cache ratio: ${inputTokens > 0 ? (cachedInputTokens / (inputTokens + cachedInputTokens) * 100).toFixed(1) : '0'}%`);
 
-                    // Emit usage event to UI
-                    const totalInputTokens = inputTokens + cachedInputTokens;
-                    emitEvent({ type: 'usage', totalInputTokens });
+                    // Emit usage event to UI.
+                    // AI SDK v6: step.usage.inputTokens is the total (noCache + cacheRead + cacheWrite).
+                    // Do NOT add cachedInputTokens — it's a deprecated alias for cacheReadTokens and would double-count.
+                    emitEvent({ type: 'usage', totalInputTokens: inputTokens });
                 }
 
                 // Save only unsaved messages from this step
@@ -757,9 +758,7 @@ export async function executeAgent(
                         }
 
                         if (unsavedMessages.length > 0) {
-                            const totalInputTokens = step.usage
-                                ? (step.usage.inputTokens || 0) + (step.usage.cachedInputTokens || 0)
-                                : undefined;
+                            const totalInputTokens = step.usage?.inputTokens;
                             await request.chatHistoryManager.saveMessages(
                                 unsavedMessages,
                                 totalInputTokens !== undefined

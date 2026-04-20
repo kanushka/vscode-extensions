@@ -2100,7 +2100,9 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
                             lineHeight: "1.5",
                             whiteSpace: "pre-wrap",
                             overflowWrap: "anywhere",
-                            marginBottom: "6px"
+                            marginBottom: "6px",
+                            maxHeight: "180px",
+                            overflowY: "auto"
                         }}>
                             {pendingPlanApproval.shellCommand || ''}
                         </div>
