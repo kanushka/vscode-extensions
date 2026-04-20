@@ -50,7 +50,7 @@ export const RadioButtonGroup = React.forwardRef<HTMLInputElement, RadioButtonGr
     const { id, className, label, options, orientation, sx, ...rest } = props;
 
     return (
-        <RadioButtonContainer id={id} className={className} sx={sx} {...rest} >
+        <RadioButtonContainer id={id} className={className} sx={sx}>
             <div style={{color: "var(--vscode-editor-foreground	)"}}>
                 <label htmlFor={`${id}-label`}>{label}</label>
             </div>
