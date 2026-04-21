@@ -102,16 +102,12 @@ jobs:
             echo "No integrator.branch set, UpdateProductIntegrator will be skipped"
           fi
 
-      - name: Download Ballerina LS
-        run: pnpm --dir workspaces/ballerina/ballerina-extension run download-ls -- --tag "$LS_TAG" --replace
-        env:
-          LS_TAG: ${{ steps.ls-version.outputs.tag }}
-          GITHUB_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
-
       - name: Build Ballerina extension
         run: node common/scripts/install-run-rush.js build -t ballerina --verbose
         env:
           isPreRelease: true
+          BALLERINA_LS_TAG: ${{ steps.ls-version.outputs.tag }}
+          GITHUB_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
 
       - name: Get VSIX file name
         id: vsix
