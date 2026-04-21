@@ -168,6 +168,20 @@ export interface ArtifactType {
     artifactFolder: string;
 }
 
+export interface ConflictingDependency {
+    groupId: string;
+    artifactId: string;
+    version: string;
+    conflictingArtifacts: string[];
+    conflictingConnectors: string[];
+}
+
+export interface LoadDependentResourcesResponse {
+    status: 'SUCCESS' | 'NO_DEPS_FOUND' | 'ERROR' | 'CONFLICT';
+    message: string;
+    conflictingDependencies?: ConflictingDependency[];
+}
+
 export class ExtendedLanguageClient extends LanguageClient {
 
     constructor(id: string, name: string, private projectUri: string, serverOptions: ServerOptions, clientOptions: LanguageClientOptions) {
@@ -385,7 +399,7 @@ export class ExtendedLanguageClient extends LanguageClient {
         return this.sendRequest('synapse/refetchIntegrationProjectDependencies');
     }
 
-    async loadDependentCAppResources(): Promise<string> {
+    async loadDependentCAppResources(): Promise<LoadDependentResourcesResponse> {
         return this.sendRequest('synapse/loadDependentResources');
     }
 
@@ -520,5 +534,9 @@ export class ExtendedLanguageClient extends LanguageClient {
 
     async getDriverMavenCoordinates(params: DriverMavenCoordinatesRequest): Promise<DriverMavenCoordinatesResponse> {
         return this.sendRequest("synapse/getDriverMavenCoordinates", params);
+    }
+
+    async isDuplicateConnector(params: string): Promise<any> {
+        return this.sendRequest("synapse/isDuplicateConnector", { connectorPath: params });
     }
 }

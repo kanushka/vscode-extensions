@@ -1972,6 +1972,7 @@ export interface FileRenameRequest {
 
 export interface MiVersionResponse {
     version: string;
+    javaVersion?: string;
 }
 
 export interface MediatorTryOutRequest {
