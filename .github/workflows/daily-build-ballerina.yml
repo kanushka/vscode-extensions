@@ -1,4 +1,4 @@
-name: Ballerina Daily Build - Release Branch
+name: Ballerina Daily Build
 
 on:
   schedule:
@@ -7,13 +7,42 @@ on:
 
 jobs:
   Build:
-    name: Build Ballerina Extension
+    name: Build Ballerina Extension (${{ matrix.vscodeBranch }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        vscodeBranch:
+          - main
+          - release/bi-1.8.x
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: release/bi-1.8.x
+          ref: ${{ matrix.vscodeBranch }}
+
+      - name: Slugify branch name
+        id: slug
+        run: |
+          slug=$(echo "${{ matrix.vscodeBranch }}" | tr '/' '-')
+          echo "slug=$slug" >> "$GITHUB_OUTPUT"
+
+      - name: Load per-branch config
+        id: config
+        run: |
+          set -euo pipefail
+          CONFIG=.github/daily-build/release.properties
+          if [ ! -f "$CONFIG" ]; then
+            echo "::error::Missing $CONFIG on branch ${{ matrix.vscodeBranch }}"
+            exit 1
+          fi
+          while IFS='=' read -r key value; do
+            [[ -z "${key// /}" || "$key" =~ ^[[:space:]]*# ]] && continue
+            key="${key// /}"
+            value="${value## }"; value="${value%% }"
+            echo "${key}=${value}"
+            echo "${key}=${value}" >> "$GITHUB_OUTPUT"
+          done < "$CONFIG"
 
       - name: Setup Rush
         uses: gigara/setup-rush@v1.2.0
@@ -23,14 +52,102 @@ jobs:
           cache-rush: true
           cache-pnpm: true
 
+      - name: Fetch latest LS daily-build artifact
+        id: ls
+        env:
+          GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
+          LS_REPO: ballerina-platform/ballerina-language-server
+          LS_WORKFLOW: daily-build.yml
+          ARTIFACT_PREFIX: ${{ steps.config.outputs.lsArtifactPrefix }}
+        run: |
+          set -euo pipefail
+
+          api() {
+            curl -fsSL \
+              -H "Accept: application/vnd.github+json" \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "X-GitHub-Api-Version: 2022-11-28" \
+              "$@"
+          }
+
+          echo "Looking up latest successful run of $LS_WORKFLOW on $LS_REPO..."
+          runs=$(api "https://api.github.com/repos/${LS_REPO}/actions/workflows/${LS_WORKFLOW}/runs?status=success&per_page=20")
+          runId=$(echo "$runs" | jq -r '[.workflow_runs[] | select(.conclusion=="success")][0].id')
+          if [ -z "$runId" ] || [ "$runId" = "null" ]; then
+            echo "::error::No successful run found for $LS_WORKFLOW on $LS_REPO"
+            exit 1
+          fi
+          echo "Latest successful run id: $runId"
+
+          artifacts=$(api "https://api.github.com/repos/${LS_REPO}/actions/runs/${runId}/artifacts?per_page=100")
+          artifact=$(echo "$artifacts" | jq -r --arg p "$ARTIFACT_PREFIX" \
+            '[.artifacts[] | select(.name | startswith($p))][0]')
+          if [ -z "$artifact" ] || [ "$artifact" = "null" ]; then
+            echo "::error::No artifact with prefix '$ARTIFACT_PREFIX' found on run $runId"
+            echo "Available artifacts:"
+            echo "$artifacts" | jq -r '.artifacts[].name'
+            exit 1
+          fi
+
+          artifactId=$(echo "$artifact" | jq -r '.id')
+          artifactName=$(echo "$artifact" | jq -r '.name')
+          echo "Using artifact: $artifactName (id=$artifactId)"
+
+          # Parse LS version from artifact name: daily-build-<prefix>-<lsVer>-<YYYYMMDD>-<HHMMSS>
+          # Strip the configured prefix and the trailing -YYYYMMDD-HHMMSS.
+          stripped=${artifactName#${ARTIFACT_PREFIX}}
+          lsVersion=$(echo "$stripped" | sed -E 's/-[0-9]{8}-[0-9]{6}$//')
+          echo "Parsed LS version: $lsVersion"
+
+          mkdir -p /tmp/ls-unpack
+          echo "Downloading artifact zip..."
+          curl -fsSL \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -o /tmp/ls-artifact.zip \
+            "https://api.github.com/repos/${LS_REPO}/actions/artifacts/${artifactId}/zip"
+
+          unzip -o /tmp/ls-artifact.zip -d /tmp/ls-unpack
+          mapfile -t jars < <(find /tmp/ls-unpack -maxdepth 2 -type f -name 'ballerina-language-server-*.jar')
+          if [ ${#jars[@]} -ne 1 ]; then
+            echo "::error::Expected exactly one ballerina-language-server-*.jar in artifact, found ${#jars[@]}:"
+            printf ' - %s\n' "${jars[@]}"
+            exit 1
+          fi
+          jar="${jars[0]}"
+          echo "Found LS JAR: $(basename "$jar")"
+
+          mkdir -p workspaces/ballerina/ballerina-extension/ls
+          rm -f workspaces/ballerina/ballerina-extension/ls/*.jar
+          cp "$jar" workspaces/ballerina/ballerina-extension/ls/
+          ls -la workspaces/ballerina/ballerina-extension/ls/
+
+          echo "lsVersion=$lsVersion" >> "$GITHUB_OUTPUT"
+          echo "lsArtifactName=$artifactName" >> "$GITHUB_OUTPUT"
+
+      - name: Rush install
+        run: node common/scripts/install-run-rush.js install
+
+      - name: Run Ballerina diagram snapshot tests
+        run: |
+          set -euo pipefail
+          for pkg in ballerina-visualizer type-diagram sequence-diagram component-diagram bi-diagram; do
+            echo "::group::Snapshot tests — $pkg"
+            (cd "workspaces/ballerina/$pkg" && pnpm test)
+            echo "::endgroup::"
+          done
+
       - name: Compute version
         id: version
         run: |
+          set -euo pipefail
           currentVersion=$(node -p "require('./workspaces/ballerina/ballerina-extension/package.json').version")
-          majorMinor=$(echo "$currentVersion" | cut -d'.' -f1,2)
-          datePatch=$(date '+%y%m%d')
-          newVersion="${majorMinor}.${datePatch}-snapshot"
-          echo "version=$newVersion" >> $GITHUB_OUTPUT
+          base=$(echo "$currentVersion" | sed -E 's/[-+].*$//')
+          datePart=$(date -u '+%y%m%d')
+          timePart=$(date -u '+%H%M')
+          newVersion="${base}-${datePart}-${timePart}"
+          echo "version=$newVersion" >> "$GITHUB_OUTPUT"
           echo "Computed version: $newVersion"
 
       - name: Update extension version
@@ -53,7 +170,6 @@ jobs:
       - name: Get VSIX file name
         id: vsix
         run: |
-          # postRushBuild copies VSIX to root; fallback to manual copy if not found
           shopt -s nullglob
           files=(ballerina-*.vsix)
           if [ ${#files[@]} -eq 0 ]; then
@@ -73,192 +189,225 @@ jobs:
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ballerina-daily-vsix
+          name: ballerina-daily-vsix-${{ steps.slug.outputs.slug }}
           path: ${{ steps.vsix.outputs.fileName }}
           retention-days: 30
 
     outputs:
       version: ${{ steps.version.outputs.version }}
       vsixFileName: ${{ steps.vsix.outputs.fileName }}
+      lsVersion: ${{ steps.ls.outputs.lsVersion }}
+      lsArtifactName: ${{ steps.ls.outputs.lsArtifactName }}
+      productIntegratorBranch: ${{ steps.config.outputs.productIntegratorBranch }}
+      branchSlug: ${{ steps.slug.outputs.slug }}
 
   Release:
-    name: Create GitHub Release
+    name: Release (${{ matrix.vscodeBranch }})
     needs: Build
     if: ${{ github.repository == 'wso2/vscode-extensions' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        vscodeBranch:
+          - main
+          - release/bi-1.8.x
     steps:
+      - name: Slugify branch name
+        id: slug
+        run: echo "slug=$(echo '${{ matrix.vscodeBranch }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
       - name: Download VSIX artifact
         uses: actions/download-artifact@v4
         with:
-          name: ballerina-daily-vsix
+          name: ballerina-daily-vsix-${{ steps.slug.outputs.slug }}
 
       - name: Create release on wso2/ballerina-vscode
         env:
           GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
+          NEW_VERSION: ${{ needs.Build.outputs.version }}
+          LS_VERSION: ${{ needs.Build.outputs.lsVersion }}
+          SOURCE_BRANCH: ${{ matrix.vscodeBranch }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          TAG="ballerina-v${{ needs.Build.outputs.version }}"
-          RELEASE_NAME="Ballerina Extension Daily Build v${{ needs.Build.outputs.version }}"
-          VSIX_FILE="${{ needs.Build.outputs.vsixFileName }}"
-
-          # Delete existing release with same tag if it exists
-          existing_id=$(curl -s -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: token $GH_TOKEN" \
-            "https://api.github.com/repos/wso2/ballerina-vscode/releases/tags/$TAG" \
-            | jq -r '.id // empty')
-
-          if [ -n "$existing_id" ] && [ "$existing_id" != "null" ]; then
-            echo "Deleting existing release $existing_id for tag $TAG"
-            curl -s -X DELETE -H "Accept: application/vnd.github.v3+json" \
-              -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/wso2/ballerina-vscode/releases/$existing_id"
-
-            # Also delete the tag
-            curl -s -X DELETE -H "Accept: application/vnd.github.v3+json" \
-              -H "Authorization: token $GH_TOKEN" \
-              "https://api.github.com/repos/wso2/ballerina-vscode/git/refs/tags/$TAG" || true
+          set -euo pipefail
+          TAG="ballerina-v${NEW_VERSION}"
+          RELEASE_NAME="Ballerina Extension Daily Build v${NEW_VERSION}"
+          shopt -s nullglob
+          files=(ballerina-*.vsix)
+          if [ ${#files[@]} -ne 1 ]; then
+            echo "::error::Expected exactly one VSIX file, found ${#files[@]}"
+            exit 1
           fi
+          VSIX_FILE="${files[0]}"
 
-          # Create new release
-          createResponse=$(curl -s -X POST -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: token $GH_TOKEN" \
-            -d "{\"tag_name\":\"$TAG\", \"name\": \"$RELEASE_NAME\", \"draft\":false, \"prerelease\":true, \"body\": \"Automated daily build from release/bi-1.8.x branch.\"}" \
+          body=$(jq -n \
+            --arg branch "$SOURCE_BRANCH" \
+            --arg ls "$LS_VERSION" \
+            --arg run "$RUN_URL" \
+            '"Automated daily build.\n\n- Source branch: `\($branch)`\n- Ballerina language server: `\($ls)`\n- Workflow run: \($run)"')
+
+          payload=$(jq -n \
+            --arg tag "$TAG" \
+            --arg name "$RELEASE_NAME" \
+            --argjson body "$body" \
+            '{tag_name:$tag, name:$name, draft:false, prerelease:true, body:$body}')
+
+          createResponse=$(curl -sS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            -d "$payload" \
             "https://api.github.com/repos/wso2/ballerina-vscode/releases")
 
-          releaseId=$(echo "$createResponse" | jq -r '.id')
-          echo "Created release ID: $releaseId"
-
-          if [ -z "$releaseId" ] || [ "$releaseId" == "null" ]; then
-            echo "Failed to create release"
+          releaseId=$(echo "$createResponse" | jq -r '.id // empty')
+          if [ -z "$releaseId" ] || [ "$releaseId" = "null" ]; then
+            echo "::error::Failed to create release"
             echo "$createResponse"
             exit 1
           fi
+          echo "Created release ID: $releaseId"
 
-          # Upload VSIX asset
           uploadResponse=$(curl -sS -w "\n%{http_code}" -X POST \
-            -H "Authorization: token $GH_TOKEN" \
+            -H "Authorization: Bearer $GH_TOKEN" \
             -H "Content-Type: application/octet-stream" \
             --data-binary @"$VSIX_FILE" \
-            "https://uploads.github.com/repos/wso2/ballerina-vscode/releases/$releaseId/assets?name=$VSIX_FILE")
+            "https://uploads.github.com/repos/wso2/ballerina-vscode/releases/${releaseId}/assets?name=${VSIX_FILE}")
 
           httpCode=$(echo "$uploadResponse" | tail -1)
           responseBody=$(echo "$uploadResponse" | sed '$d')
-
           if [ "$httpCode" -ge 200 ] && [ "$httpCode" -lt 300 ]; then
             echo "Upload successful: $(echo "$responseBody" | jq -r '.name')"
           else
-            echo "Upload failed with HTTP $httpCode"
+            echo "::error::Upload failed with HTTP $httpCode"
             echo "$responseBody"
             exit 1
           fi
 
   UpdateProductIntegrator:
-    name: Update product-integrator version
+    name: Update product-integrator (${{ matrix.vscodeBranch }})
     needs: [Build, Release]
     if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        vscodeBranch:
+          - main
+          - release/bi-1.8.x
     steps:
+      - name: Checkout vscode-extensions branch (for config)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.vscodeBranch }}
+          path: vscode-extensions
+
+      - name: Load per-branch config
+        id: config
+        run: |
+          set -euo pipefail
+          CONFIG=vscode-extensions/.github/daily-build/release.properties
+          if [ ! -f "$CONFIG" ]; then
+            echo "::error::Missing $CONFIG on branch ${{ matrix.vscodeBranch }}"
+            exit 1
+          fi
+          while IFS='=' read -r key value; do
+            [[ -z "${key// /}" || "$key" =~ ^[[:space:]]*# ]] && continue
+            key="${key// /}"
+            value="${value## }"; value="${value%% }"
+            echo "${key}=${value}" >> "$GITHUB_OUTPUT"
+          done < "$CONFIG"
+
       - name: Checkout product-integrator
         uses: actions/checkout@v4
         with:
           repository: wso2/product-integrator
-          ref: 5.0.x
+          ref: ${{ steps.config.outputs.productIntegratorBranch }}
           token: ${{ secrets.CHOREO_BOT_TOKEN }}
+          path: product-integrator
 
-      - name: Update ballerina.extension.version
+      - name: Update ballerina.extension.version and open PR
+        working-directory: product-integrator
         env:
           NEW_VERSION: ${{ needs.Build.outputs.version }}
           GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
+          BASE_BRANCH: ${{ steps.config.outputs.productIntegratorBranch }}
+          SOURCE_BRANCH: ${{ matrix.vscodeBranch }}
         run: |
+          set -euo pipefail
           PROPERTIES_FILE="ci/build/component-versions.properties"
-          BRANCH_NAME="update-bal-ext-version-${NEW_VERSION}"
+          slug=$(echo "$SOURCE_BRANCH" | tr '/' '-')
+          BRANCH_NAME="update-bal-ext-version-${slug}-${NEW_VERSION}"
 
-          # Update the version property
           sed -i "s/^ballerina\.extension\.version=.*/ballerina.extension.version=${NEW_VERSION}/" "$PROPERTIES_FILE"
-
-          echo "Updated $PROPERTIES_FILE:"
           grep "ballerina.extension.version" "$PROPERTIES_FILE"
 
-          # Check if there are actual changes
           if git diff --quiet; then
             echo "No changes detected, skipping PR creation"
             exit 0
           fi
 
-          # Configure git
           git config user.name "WSO2 Builder"
           git config user.email "builder@wso2.com"
-
-          # Create branch, commit, and push
           git checkout -b "$BRANCH_NAME"
           git add "$PROPERTIES_FILE"
           git commit -m "Update ballerina.extension.version to ${NEW_VERSION}"
           git push origin "$BRANCH_NAME"
 
-          # Create PR
-          pr_response=$(curl -s -X POST \
-            -H "Accept: application/vnd.github.v3+json" \
-            -H "Authorization: token $GH_TOKEN" \
-            -d "{\"title\": \"Update ballerina.extension.version to ${NEW_VERSION}\", \"head\": \"${BRANCH_NAME}\", \"base\": \"5.0.x\", \"body\": \"Automated PR to update Ballerina extension version after daily build.\\n\\nRelease: https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v${NEW_VERSION}\"}" \
+          pr_body="Automated PR to update Ballerina extension version after daily build.\n\n- Source vscode branch: ${SOURCE_BRANCH}\n- Release: https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v${NEW_VERSION}"
+          payload=$(jq -n \
+            --arg title "Update ballerina.extension.version to ${NEW_VERSION}" \
+            --arg head "$BRANCH_NAME" \
+            --arg base "$BASE_BRANCH" \
+            --arg body "$pr_body" \
+            '{title:$title, head:$head, base:$base, body:$body}')
+
+          pr_response=$(curl -sS -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -d "$payload" \
             "https://api.github.com/repos/wso2/product-integrator/pulls")
 
           pr_url=$(echo "$pr_response" | jq -r '.html_url // empty')
           if [ -n "$pr_url" ] && [ "$pr_url" != "null" ]; then
             echo "Created PR: $pr_url"
           else
-            echo "Failed to create PR"
+            echo "::error::Failed to create PR"
             echo "$pr_response"
             exit 1
           fi
 
   NotifySuccess:
-    name: Notify Success
+    name: Notify Success (${{ matrix.vscodeBranch }})
     needs: [Build, Release]
     if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        vscodeBranch:
+          - main
+          - release/bi-1.8.x
     steps:
-      - name: Release Notification
-        run: |
-          body=$(cat << 'EOF'
-          {
-            "cards": [
-              {
-                "header": {
-                  "title": "Daily Build - Release Branch",
-                  "subtitle": "Ballerina Extension"
-                },
-                "sections": [
-                  {
-                    "widgets": [
-                      {
-                        "keyValue": {
-                          "topLabel": "Ballerina Extension",
-                          "content": "v${{ needs.Build.outputs.version }}",
-                          "iconUrl": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9a/Visual_Studio_Code_1.35_icon.svg/512px-Visual_Studio_Code_1.35_icon.svg.png",
-                          "button": {
-                            "textButton": {
-                              "text": "Download VSIX",
-                              "onClick": {
-                                "openLink": {
-                                  "url": "https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v${{ needs.Build.outputs.version }}"
-                                }
-                              }
-                            }
-                          }
-                        }
-                      }
-                    ]
-                  }
-                ]
-              }
-            ]
-          }
-          EOF
-          )
-          curl \
-            -X POST \
-            -H 'Content-Type: application/json' \
-            "${{ secrets.BI_TEAM_CHAT_API }}" \
-            -d "$body"
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.vscodeBranch }}
+
+      - name: Slugify branch name
+        id: slug
+        run: echo "slug=$(echo '${{ matrix.vscodeBranch }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
+
+      - name: Download VSIX artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ballerina-daily-vsix-${{ steps.slug.outputs.slug }}
+
+      - name: Notification - Ballerina
+        uses: ./.github/actions/dailyBuildNotification
+        with:
+          title: "Ballerina (${{ matrix.vscodeBranch }})"
+          fileName: ballerina
+          chatAPI: ${{ secrets.BI_TEAM_CHAT_API }}
 
   NotifyFailure:
     name: Notify Failure
@@ -267,12 +416,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: release/bi-1.8.x
       - name: Failure Notification
         uses: ./.github/actions/failure-notification
         with:
-          title: "Daily Build - Release Branch Failed"
+          title: "Ballerina Daily Build Failed"
           run_id: ${{ github.run_id }}
           chat_api: ${{ secrets.TOOLING_TEAM_CHAT_API }}
           repository: ${{ github.repository }}
