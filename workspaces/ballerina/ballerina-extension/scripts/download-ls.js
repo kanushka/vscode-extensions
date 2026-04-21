@@ -42,11 +42,6 @@ function checkExistingJar(expectedVersion) {
             return false;
         }
 
-        if (!expectedVersion) {
-            console.log(`Ballerina language server JAR already exists in ${path.relative(PROJECT_ROOT, LS_DIR)}`);
-            return true;
-        }
-
         const expectedJar = jarFiles.find(file => file === `ballerina-language-server-${expectedVersion}.jar`);
         if (expectedJar) {
             console.log(`Ballerina language server JAR for version ${expectedVersion} already exists in ${path.relative(PROJECT_ROOT, LS_DIR)}`);
