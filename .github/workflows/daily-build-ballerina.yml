@@ -228,7 +228,10 @@ jobs:
   Release:
     name: Release (${{ matrix.vscodeBranch }})
     needs: Build
-    if: ${{ github.repository == 'wso2/vscode-extensions' }}
+    # !cancelled() lets this job run even when a different matrix leg of Build failed —
+    # per-leg isolation. The `gate` step below skips this specific leg if its own
+    # Build didn't produce the metadata artifact.
+    if: ${{ !cancelled() && github.repository == 'wso2/vscode-extensions' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -241,18 +244,38 @@ jobs:
         id: slug
         run: echo "slug=$(echo '${{ matrix.vscodeBranch }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
 
+      - name: Gate on this branch's Build success
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          artifact="ballerina-daily-metadata-${{ steps.slug.outputs.slug }}"
+          found=$(gh api --paginate \
+            "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq ".artifacts[] | select(.name == \"$artifact\") | .id" | head -n1)
+          if [ -z "$found" ]; then
+            echo "Build for ${{ matrix.vscodeBranch }} did not produce $artifact; skipping this leg."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download VSIX artifact
+        if: steps.gate.outputs.skip != 'true'
         uses: actions/download-artifact@v4
         with:
           name: ballerina-daily-vsix-${{ steps.slug.outputs.slug }}
 
       - name: Download build metadata artifact
+        if: steps.gate.outputs.skip != 'true'
         uses: actions/download-artifact@v4
         with:
           name: ballerina-daily-metadata-${{ steps.slug.outputs.slug }}
           path: build-metadata
 
       - name: Load build metadata
+        if: steps.gate.outputs.skip != 'true'
         id: meta
         run: |
           set -euo pipefail
@@ -270,6 +293,7 @@ jobs:
           done
 
       - name: Create release on wso2/ballerina-vscode
+        if: steps.gate.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
           NEW_VERSION: ${{ steps.meta.outputs.version }}
@@ -334,7 +358,10 @@ jobs:
   UpdateProductIntegrator:
     name: Update product-integrator (${{ matrix.vscodeBranch }})
     needs: [Build, Release]
-    if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
+    # Per-leg gating: !cancelled() allows this leg to run even when another matrix
+    # leg of Build/Release failed. The `gate` step skips this specific leg if its
+    # own Build didn't produce the metadata artifact.
+    if: ${{ !cancelled() && github.repository == 'wso2/vscode-extensions' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -347,13 +374,32 @@ jobs:
         id: slug
         run: echo "slug=$(echo '${{ matrix.vscodeBranch }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
 
+      - name: Gate on this branch's Build success
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          artifact="ballerina-daily-metadata-${{ steps.slug.outputs.slug }}"
+          found=$(gh api --paginate \
+            "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq ".artifacts[] | select(.name == \"$artifact\") | .id" | head -n1)
+          if [ -z "$found" ]; then
+            echo "Build for ${{ matrix.vscodeBranch }} did not produce $artifact; skipping this leg."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Download build metadata artifact
+        if: steps.gate.outputs.skip != 'true'
         uses: actions/download-artifact@v4
         with:
           name: ballerina-daily-metadata-${{ steps.slug.outputs.slug }}
           path: build-metadata
 
       - name: Load build metadata
+        if: steps.gate.outputs.skip != 'true'
         id: meta
         run: |
           set -euo pipefail
@@ -371,6 +417,7 @@ jobs:
           done
 
       - name: Checkout product-integrator
+        if: steps.gate.outputs.skip != 'true'
         uses: actions/checkout@v4
         with:
           repository: wso2/product-integrator
@@ -379,6 +426,7 @@ jobs:
           path: product-integrator
 
       - name: Update ballerina.extension.version and open PR
+        if: steps.gate.outputs.skip != 'true'
         working-directory: product-integrator
         env:
           NEW_VERSION: ${{ steps.meta.outputs.version }}
@@ -432,7 +480,10 @@ jobs:
   NotifySuccess:
     name: Notify Success (${{ matrix.vscodeBranch }})
     needs: [Build, Release, UpdateProductIntegrator]
-    if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
+    # Per-leg gating: !cancelled() allows this leg to run even when another matrix
+    # leg failed. The `gate` step skips this specific leg if its own Build didn't
+    # produce the metadata artifact.
+    if: ${{ !cancelled() && github.repository == 'wso2/vscode-extensions' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -441,20 +492,46 @@ jobs:
           - main
           - release/bi-1.8.x
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ matrix.vscodeBranch }}
-
       - name: Slugify branch name
         id: slug
         run: echo "slug=$(echo '${{ matrix.vscodeBranch }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
 
+      - name: Gate on this branch's full-pipeline success
+        id: gate
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Skip if Build didn't produce this leg's metadata artifact, or if any
+          # prior matrix job for this leg failed. We can't read per-leg Release /
+          # UpdateProductIntegrator results from `needs.*`, so rely on the
+          # artifact gate: downstream legs only skip Release/UpdatePI on their
+          # own `gate=true`, so artifact presence implies Build succeeded. A
+          # Release/UpdatePI failure on this leg is caught by NotifyFailure.
+          artifact="ballerina-daily-metadata-${{ steps.slug.outputs.slug }}"
+          found=$(gh api --paginate \
+            "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
+            --jq ".artifacts[] | select(.name == \"$artifact\") | .id" | head -n1)
+          if [ -z "$found" ]; then
+            echo "Build for ${{ matrix.vscodeBranch }} did not produce $artifact; skipping notify."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/checkout@v4
+        if: steps.gate.outputs.skip != 'true'
+        with:
+          ref: ${{ matrix.vscodeBranch }}
+
       - name: Download VSIX artifact
+        if: steps.gate.outputs.skip != 'true'
         uses: actions/download-artifact@v4
         with:
           name: ballerina-daily-vsix-${{ steps.slug.outputs.slug }}
 
       - name: Notification - Ballerina
+        if: steps.gate.outputs.skip != 'true'
         uses: ./.github/actions/dailyBuildNotification
         with:
           title: "Ballerina (${{ matrix.vscodeBranch }})"
