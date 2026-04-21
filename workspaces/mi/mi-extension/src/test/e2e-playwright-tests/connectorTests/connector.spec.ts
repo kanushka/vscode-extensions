@@ -90,7 +90,7 @@ export default function createTests() {
         const diagram = new Diagram(page.page, 'Resource');
         await diagram.init();
 
-        await diagram.addConnectorOperation('File', 'createDirectory');
+        await diagram.addConnectorOperation('File', 'Create Directory', 'Create Directory');
 
         // create connection through connector form
         console.log('Create connection through connector operation form');
