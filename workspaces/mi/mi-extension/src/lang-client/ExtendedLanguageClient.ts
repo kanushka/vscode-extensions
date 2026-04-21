@@ -535,4 +535,8 @@ export class ExtendedLanguageClient extends LanguageClient {
     async getDriverMavenCoordinates(params: DriverMavenCoordinatesRequest): Promise<DriverMavenCoordinatesResponse> {
         return this.sendRequest("synapse/getDriverMavenCoordinates", params);
     }
+
+    async isDuplicateConnector(params: string): Promise<any> {
+        return this.sendRequest("synapse/isDuplicateConnector", { connectorPath: params });
+    }
 }
