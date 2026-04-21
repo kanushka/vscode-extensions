@@ -78,28 +78,58 @@ jobs:
               "$@"
           }
 
-          echo "Looking up latest successful run of $LS_WORKFLOW on $LS_REPO..."
-          runs=$(api "https://api.github.com/repos/${LS_REPO}/actions/workflows/${LS_WORKFLOW}/runs?status=success&per_page=20")
-          runId=$(echo "$runs" | jq -r '[.workflow_runs[] | select(.conclusion=="success")][0].id')
-          if [ -z "$runId" ] || [ "$runId" = "null" ]; then
-            echo "::error::No successful run found for $LS_WORKFLOW on $LS_REPO"
-            exit 1
-          fi
-          echo "Latest successful run id: $runId"
-
-          artifacts=$(api "https://api.github.com/repos/${LS_REPO}/actions/runs/${runId}/artifacts?per_page=100")
-          artifact=$(echo "$artifacts" | jq -r --arg p "$ARTIFACT_PREFIX" \
-            '[.artifacts[] | select(.name | startswith($p))][0]')
-          if [ -z "$artifact" ] || [ "$artifact" = "null" ]; then
-            echo "::error::No artifact with prefix '$ARTIFACT_PREFIX' found on run $runId"
-            echo "Available artifacts:"
-            echo "$artifacts" | jq -r '.artifacts[].name'
+          # We iterate recent runs (any conclusion) newest-first and pick the first
+          # one that actually has an artifact matching our prefix. The LS workflow
+          # publishes artifacts from its pack stage before running tests, so runs
+          # can finish with conclusion=failure while still carrying a usable
+          # artifact — we tolerate that on purpose. A run matching ARTIFACT_PREFIX
+          # proves the pack stage for this branch succeeded (other branches'
+          # failures publish different prefixes or none).
+          echo "Looking up recent runs of $LS_WORKFLOW on $LS_REPO..."
+          runs=$(api "https://api.github.com/repos/${LS_REPO}/actions/workflows/${LS_WORKFLOW}/runs?per_page=10")
+          mapfile -t runEntries < <(echo "$runs" | jq -r '.workflow_runs[] | "\(.id) \(.conclusion // "in_progress") \(.created_at)"')
+          if [ ${#runEntries[@]} -eq 0 ]; then
+            echo "::error::No recent runs found for $LS_WORKFLOW on $LS_REPO"
             exit 1
           fi
 
-          artifactId=$(echo "$artifact" | jq -r '.id')
-          artifactName=$(echo "$artifact" | jq -r '.name')
-          echo "Using artifact: $artifactName (id=$artifactId)"
+          selectedRunId=""
+          selectedArtifact=""
+          selectedRunConclusion=""
+          selectedRunCreated=""
+          for entry in "${runEntries[@]}"; do
+            read -r rid rconc rat <<<"$entry"
+            if [ "$rconc" = "in_progress" ] || [ "$rconc" = "null" ]; then
+              echo "Skipping run $rid (still in progress, created=$rat)"
+              continue
+            fi
+            arts=$(api "https://api.github.com/repos/${LS_REPO}/actions/runs/${rid}/artifacts?per_page=100")
+            art=$(echo "$arts" | jq -r --arg p "$ARTIFACT_PREFIX" \
+              '[.artifacts[] | select(.name | startswith($p))][0]')
+            if [ -n "$art" ] && [ "$art" != "null" ]; then
+              selectedRunId="$rid"
+              selectedArtifact="$art"
+              selectedRunConclusion="$rconc"
+              selectedRunCreated="$rat"
+              echo "Selected run $rid (conclusion=$rconc, created=$rat) with prefix '$ARTIFACT_PREFIX'"
+              break
+            else
+              echo "Run $rid (conclusion=$rconc) has no artifact matching '$ARTIFACT_PREFIX'; trying next"
+            fi
+          done
+
+          if [ -z "$selectedRunId" ]; then
+            echo "::error::No recent run of $LS_WORKFLOW has an artifact matching '$ARTIFACT_PREFIX'. Checked ${#runEntries[@]} runs."
+            exit 1
+          fi
+
+          if [ "$selectedRunConclusion" != "success" ]; then
+            echo "::notice::Using LS artifact from run $selectedRunId despite run conclusion='$selectedRunConclusion' — pack stage succeeded and artifact is available."
+          fi
+
+          artifactId=$(echo "$selectedArtifact" | jq -r '.id')
+          artifactName=$(echo "$selectedArtifact" | jq -r '.name')
+          echo "Using artifact: $artifactName (id=$artifactId) from run $selectedRunId"
 
           # Parse LS version from artifact name: daily-build-<prefix>-<lsVer>-<YYYYMMDD>-<HHMMSS>
           # Strip the configured prefix and the trailing -YYYYMMDD-HHMMSS.
@@ -133,6 +163,8 @@ jobs:
 
           echo "lsVersion=$lsVersion" >> "$GITHUB_OUTPUT"
           echo "lsArtifactName=$artifactName" >> "$GITHUB_OUTPUT"
+          echo "lsRunId=$selectedRunId" >> "$GITHUB_OUTPUT"
+          echo "lsRunConclusion=$selectedRunConclusion" >> "$GITHUB_OUTPUT"
 
       - name: Rush install
         run: node common/scripts/install-run-rush.js install
@@ -213,6 +245,8 @@ jobs:
           vsixFileName=${{ steps.vsix.outputs.fileName }}
           lsVersion=${{ steps.ls.outputs.lsVersion }}
           lsArtifactName=${{ steps.ls.outputs.lsArtifactName }}
+          lsRunId=${{ steps.ls.outputs.lsRunId }}
+          lsRunConclusion=${{ steps.ls.outputs.lsRunConclusion }}
           productIntegratorBranch=${{ steps.config.outputs.productIntegratorBranch }}
           vscodeBranch=${{ matrix.vscodeBranch }}
           branchSlug=${{ steps.slug.outputs.slug }}
@@ -298,6 +332,8 @@ jobs:
           GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
           NEW_VERSION: ${{ steps.meta.outputs.version }}
           LS_VERSION: ${{ steps.meta.outputs.lsVersion }}
+          LS_RUN_ID: ${{ steps.meta.outputs.lsRunId }}
+          LS_RUN_CONCLUSION: ${{ steps.meta.outputs.lsRunConclusion }}
           SOURCE_BRANCH: ${{ matrix.vscodeBranch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -312,11 +348,14 @@ jobs:
           fi
           VSIX_FILE="${files[0]}"
 
+          LS_RUN_URL="https://github.com/ballerina-platform/ballerina-language-server/actions/runs/${LS_RUN_ID}"
           body=$(jq -n \
             --arg branch "$SOURCE_BRANCH" \
             --arg ls "$LS_VERSION" \
+            --arg lsRun "$LS_RUN_URL" \
+            --arg lsConc "$LS_RUN_CONCLUSION" \
             --arg run "$RUN_URL" \
-            '"Automated daily build.\n\n- Source branch: `\($branch)`\n- Ballerina language server: `\($ls)`\n- Workflow run: \($run)"')
+            '"Automated daily build.\n\n- Source branch: `\($branch)`\n- Ballerina language server: `\($ls)`\n- LS run: \($lsRun) (conclusion: `\($lsConc)`)\n- Workflow run: \($run)"')
 
           payload=$(jq -n \
             --arg tag "$TAG" \
