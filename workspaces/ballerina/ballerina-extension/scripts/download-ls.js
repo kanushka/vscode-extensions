@@ -29,6 +29,16 @@ function getTagValue(cliArgs, index) {
 // Tag resolution priority: --tag flag > BALLERINA_LS_TAG env var > default (latest)
 const requestedTag = getTagValue(args, tagIndex) || process.env.BALLERINA_LS_TAG || undefined;
 
+function hasAnyJar() {
+    try {
+        if (!fs.existsSync(LS_DIR)) return false;
+        const files = fs.readdirSync(LS_DIR);
+        return files.some(file => file.includes('ballerina-language-server-') && file.endsWith('.jar'));
+    } catch (error) {
+        return false;
+    }
+}
+
 function checkExistingJar(expectedVersion) {
     try {
         if (!fs.existsSync(LS_DIR)) {
@@ -236,6 +246,12 @@ async function main() {
                 return undefined;
             }
             return tag.startsWith('v') ? tag.slice(1) : tag;
+        }
+
+        // No explicit tag: any existing JAR is sufficient — skip network call
+        if (!forceReplace && !requestedTag && hasAnyJar()) {
+            console.log(`Ballerina language server JAR already exists; skipping download (no version specified).`);
+            process.exit(0);
         }
 
         // For concrete tags, check if the version already exists before fetching release info
