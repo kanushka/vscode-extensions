@@ -407,7 +407,7 @@ jobs:
 
   NotifySuccess:
     name: Notify Success (${{ matrix.vscodeBranch }})
-    needs: [Build, Release]
+    needs: [Build, Release, UpdateProductIntegrator]
     if: ${{ success() && github.repository == 'wso2/vscode-extensions' }}
     runs-on: ubuntu-latest
     strategy:
