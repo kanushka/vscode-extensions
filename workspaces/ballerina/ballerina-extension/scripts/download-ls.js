@@ -9,7 +9,6 @@ const LS_DIR = path.join(PROJECT_ROOT, 'ls');
 const GITHUB_REPO_URL = 'https://api.github.com/repos/ballerina-platform/ballerina-language-server';
 
 const args = process.argv.slice(2);
-const usePrerelease = args.includes('--prerelease') || process.env.isPreRelease === 'true';
 const forceReplace = args.includes('--replace');
 
 const tagIndex = args.indexOf('--tag');
@@ -27,7 +26,8 @@ function getTagValue(cliArgs, index) {
     return value;
 }
 
-const requestedTag = getTagValue(args, tagIndex);
+// Tag resolution priority: --tag flag > BALLERINA_LS_TAG env var > default (latest)
+const requestedTag = getTagValue(args, tagIndex) || process.env.BALLERINA_LS_TAG || undefined;
 
 function checkExistingJar(expectedVersion) {
     try {
@@ -182,7 +182,7 @@ function getFileSize(filePath) {
     }
 }
 
-async function getLatestRelease(usePrerelease) {
+async function getLatestRelease() {
     if (requestedTag && requestedTag !== 'latest' && requestedTag !== 'prerelease') {
         const releaseResponse = await httpsRequest(`${GITHUB_REPO_URL}/releases/tags/${encodeURIComponent(requestedTag)}`);
         try {
@@ -192,16 +192,7 @@ async function getLatestRelease(usePrerelease) {
         }
     }
 
-    const effectivePrerelease = requestedTag
-        ? requestedTag === 'prerelease'
-        : usePrerelease;
-    
-    // Warn if env var conflicts with explicit --tag argument
-    if (requestedTag && requestedTag !== 'prerelease' && usePrerelease) {
-        console.warn(`Warning: --tag ${requestedTag} specified but isPreRelease=true in environment. Using --tag value.`);
-    }
-
-    if (effectivePrerelease) {
+    if (requestedTag === 'prerelease') {
         // Get all releases and find the latest prerelease
         const releasesResponse = await httpsRequest(`${GITHUB_REPO_URL}/releases`);
         let releases;
@@ -241,13 +232,7 @@ async function getLatestRelease(usePrerelease) {
 
 async function main() {
     try {
-        // If an explicit --tag was provided, it takes precedence (validation happens in effectivePrerelease logic above)
-        if (!requestedTag && usePrerelease) {
-            // No explicit tag, falling back to isPreRelease env var
-            console.log('Using isPreRelease env var');
-        }
-
-        if (tagIndex >= 0 && !requestedTag) {
+        if (tagIndex >= 0 && !getTagValue(args, tagIndex)) {
             throw new Error('Missing value for --tag');
         }
 
@@ -265,9 +250,7 @@ async function main() {
             }
         }
 
-        const releaseLabel = requestedTag
-            ? ` (tag: ${requestedTag})`
-            : (usePrerelease ? ' (prerelease)' : '');
+        const releaseLabel = requestedTag ? ` (tag: ${requestedTag})` : '';
         console.log(`Downloading Ballerina language server${releaseLabel}${forceReplace ? ' (force replace)' : ''}...`);
 
         if (forceReplace && fs.existsSync(LS_DIR)) {
@@ -280,7 +263,7 @@ async function main() {
         }
 
         console.log('Fetching release information...');
-        const releaseData = await getLatestRelease(usePrerelease);
+        const releaseData = await getLatestRelease();
 
         if (!releaseData?.tag_name) {
             throw new Error('Invalid release data: missing tag_name');

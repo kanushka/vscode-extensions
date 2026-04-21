@@ -6,9 +6,6 @@ inputs:
   enableCache:
     default: true
     type: boolean
-  enableLSCache:
-    default: false
-    type: boolean
   ballerinaLSTag:
     description: 'Override LS tag (latest, prerelease, or specific tag like v1.8.0.m1). If empty, reads from release.properties.'
     default: ''
@@ -203,31 +200,8 @@ runs:
           exit 1
         fi
         printf 'tag=%s\n' "$TAG" >> "$GITHUB_OUTPUT"
-        if [ "$TAG" = "latest" ] || [ "$TAG" = "prerelease" ]; then
-          echo "cacheable=false" >> "$GITHUB_OUTPUT"
-        else
-          echo "cacheable=true" >> "$GITHUB_OUTPUT"
-        fi
       env:
         OVERRIDE_TAG: ${{ inputs.ballerinaLSTag }}
-
-    - name: Restore Ballerina LS from cache
-      id: ballerina-ls-cache
-      if: ${{ inputs.enableLSCache == 'true' && steps.bal-ls-version.outputs.cacheable == 'true' }}
-      uses: actions/cache@v4
-      with:
-        path: workspaces/ballerina/ballerina-extension/ls
-        key: ballerina-ls-${{ steps.bal-ls-version.outputs.tag }}
-        retention-days: 1
-
-    - name: Download Ballerina LS
-      if: ${{ steps.bal-ls-version.outputs.cacheable != 'true' || steps.ballerina-ls-cache.outputs.cache-hit != 'true' }}
-      shell: bash
-      run: |
-        pnpm --dir workspaces/ballerina/ballerina-extension run download-ls -- --tag "$LS_TAG" --replace
-      env:
-        LS_TAG: ${{ steps.bal-ls-version.outputs.tag }}
-        GITHUB_TOKEN: ${{ inputs.token }}
 
     - name: Build repo
       shell: bash
@@ -236,6 +210,8 @@ runs:
         node common/scripts/install-run-rush.js build --verbose
       env:
         isPreRelease: ${{ inputs.isPreRelease == 'true' }}
+        BALLERINA_LS_TAG: ${{ steps.bal-ls-version.outputs.tag }}
+        GITHUB_TOKEN: ${{ inputs.token }}
         BALLERINA_AUTH_ORG: ${{ inputs.BALLERINA_AUTH_ORG }}
         BALLERINA_AUTH_CLIENT_ID: ${{ inputs.BALLERINA_AUTH_CLIENT_ID }}
         BALLERINA_DEV_COPLIOT_ROOT_URL: ${{ inputs.BALLERINA_DEV_COPLIOT_ROOT_URL }}
