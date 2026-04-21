@@ -4002,6 +4002,40 @@ ${endpointAttributes}
     async copyConnectorZip(params: CopyConnectorZipRequest): Promise<CopyConnectorZipResponse> {
         const { connectorPath } = params;
         try {
+            const langClient = await MILanguageClient.getInstance(this.projectUri);
+            const isDuplicate = await langClient.isDuplicateConnector(connectorPath);
+            if (isDuplicate?.isFromProject === false) {
+                window.showErrorMessage('The connector you are trying to add is already added from a dependency project.');
+                return { success: false };
+            }
+            if (isDuplicate?.connectorName) {
+                const overwrite = await window.showWarningMessage(
+                    `A connector with the name already exists. Do you want to overwrite it?`,
+                    { modal: true },
+                    'Yes'
+                );
+                if (overwrite === 'Yes') {
+                    const rpcClient = new MiVisualizerRpcManager(this.projectUri);
+                    if (isDuplicate?.connectorPath) {
+                        await this.removeConnector({ connectorPath: isDuplicate.connectorPath });
+                    } else {
+                        const projectDetails = await rpcClient.getProjectDetails();
+                        const connectorDependencies = projectDetails.dependencies.connectorDependencies;
+                        for (const dependencies of connectorDependencies) {
+                            if (dependencies.artifact === isDuplicate.artifactId && dependencies.version === isDuplicate.version) {
+                                await rpcClient.updatePomValues({
+                                    pomValues: [{ range: dependencies.range, value: '' }]
+                                });
+                                break;
+                            }
+                        }
+                    }
+                    await rpcClient.updateConnectorDependencies();
+                } else {
+                    return { success: false };
+                }
+            }
+            
             const connectorDirectory = path.join(this.projectUri, 'src', 'main', 'wso2mi', 'resources', 'connectors');
 
             if (!fs.existsSync(connectorDirectory)) {
