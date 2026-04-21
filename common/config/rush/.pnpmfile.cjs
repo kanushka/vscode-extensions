@@ -42,6 +42,14 @@ module.exports = {
         if (deps['handlebars']) deps['handlebars'] = '4.7.9';
         if (deps['tmp']) deps['tmp'] = '0.2.4';
         if (deps['undici']) deps['undici'] = '7.24.0';
+        if (deps['protobufjs']) {
+          const currentVersion = deps['protobufjs'];
+          if (currentVersion.startsWith('^8') || currentVersion.startsWith('8')) {
+            deps['protobufjs'] = '8.0.1';
+          } else {
+            deps['protobufjs'] = '7.5.5';
+          }
+        }
         if (deps['vite']) deps['vite'] = '6.0.14';
         if (deps['yauzl']) deps['yauzl'] = '3.2.1';
         if (deps['follow-redirects']) deps['follow-redirects'] = '1.16.0';
