@@ -176,14 +176,30 @@ export function createDeepWikiExecute(mainAbortSignal?: AbortSignal): DeepWikiAs
         }
 
         let client: any;
+        // `cleaned` flips true the moment the finally block runs. When the
+        // race was lost by createMCPClient/client.tools, the underlying
+        // promise can still resolve after we're already done — in that case
+        // the late-arriving client must be closed immediately, because the
+        // finally block has already run and won't see the assignment.
+        let cleaned = false;
+        const onLateClient = (c: any) => {
+            if (!c) return;
+            if (cleaned) {
+                Promise.resolve(c.close?.()).catch((closeError) => {
+                    logDebug(`[DeepWikiTool] Failed to close late-arriving MCP client: ${String(closeError)}`);
+                });
+                return;
+            }
+            client = c;
+        };
         try {
             logInfo('[DeepWikiTool] Querying DeepWiki MCP server');
             // raceWithAbort ensures the MCP handshake and tool discovery cancel
             // immediately on user abort, rather than blocking on network IO.
             // We still capture the client from the underlying promise via
             // .then so that if raceWithAbort loses the race, a late-resolving
-            // MCP client is stored here and closed by the finally block — no
-            // connection leak.
+            // MCP client is either stored in `client` (closed by finally) or
+            // closed directly when `cleaned` is already true.
             const createPromise = createMCPClient({
                 transport: {
                     type: 'http',
@@ -191,7 +207,7 @@ export function createDeepWikiExecute(mainAbortSignal?: AbortSignal): DeepWikiAs
                     redirect: 'error',
                 },
             }).then((c: any) => {
-                client = c;
+                onLateClient(c);
                 return c;
             });
             client = await raceWithAbort(createPromise, mainAbortSignal);
@@ -240,6 +256,7 @@ export function createDeepWikiExecute(mainAbortSignal?: AbortSignal): DeepWikiAs
                 error: 'DEEPWIKI_QUERY_FAILED',
             };
         } finally {
+            cleaned = true;
             if (client) {
                 try {
                     await client.close();

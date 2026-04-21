@@ -44,7 +44,7 @@ import {
     ResolvedVersion,
     VersionResolutionError,
 } from './connector_version';
-import { ensureOperationNotAborted } from './abort-utils';
+import { ensureOperationNotAborted, isOperationAbortedError } from './abort-utils';
 
 const NO_OUTPUT_SCHEMA_PLACEHOLDER = 'not available for this operation';
 
@@ -314,6 +314,7 @@ async function buildLSOperationDetails(
     requestedOperations: string[],
     requestedConnections: string[],
     warnings: Set<string>,
+    mainAbortSignal?: AbortSignal,
 ): Promise<Record<string, any> | null> {
     const selectedOperations: any[] = [];
     const selectedConnections: any[] = [];
@@ -323,6 +324,7 @@ async function buildLSOperationDetails(
     // connectors) must not leak into tool output, even if the agent
     // explicitly asks for them by name — treat them as not found.
     for (const reqOp of requestedOperations) {
+        ensureOperationNotAborted(mainAbortSignal, `reading schema for '${name}.${reqOp}'`);
         const action = lsResult.operations.find(
             a => normalizeIdentifier(a.name) === reqOp && !a.isHidden
         );
@@ -343,20 +345,29 @@ async function buildLSOperationDetails(
             // connector-level directory + <action.name>.json only covers
             // connectors that follow the default layout; some connectors ship
             // schemas at non-standard locations. In both cases the read is
-            // constrained to the connector-level outputSchemaPath directory so
-            // a rogue per-op path can't escape via symlink.
-            const schemaBaseDir = lsResult.outputSchemaPath || '';
-            let parsed = await readOutputSchemaFile(action.outputSchemaPath, schemaBaseDir || undefined);
-            if (parsed === null) {
-                parsed = await readOutputSchema(
-                    schemaBaseDir,
-                    action.name
-                );
-            }
-            if (parsed !== null) {
-                outputSchema = flattenOutputSchema(parsed) ?? NO_OUTPUT_SCHEMA_PLACEHOLDER;
+            // constrained to a trusted connector-level base dir so a rogue
+            // per-op path can't escape via symlink. If no trusted base is
+            // known, fall back to extractedConnectorPath so we never pass
+            // undefined and silently bypass the check.
+            const schemaBaseDir =
+                lsResult.outputSchemaPath
+                || lsResult.extractedConnectorPath
+                || '';
+            if (!schemaBaseDir) {
+                logWarn(`[ConnectorTool] No trusted base dir for '${name}.${action.name}' — skipping output schema read.`);
             } else {
-                logWarn(`[ConnectorTool] Output schema declared for '${name}.${action.name}' but could not be read at '${action.outputSchemaPath}' or '${lsResult.outputSchemaPath}/${action.name}.json'`);
+                let parsed = await readOutputSchemaFile(action.outputSchemaPath, schemaBaseDir);
+                if (parsed === null && lsResult.outputSchemaPath) {
+                    parsed = await readOutputSchema(
+                        lsResult.outputSchemaPath,
+                        action.name
+                    );
+                }
+                if (parsed !== null) {
+                    outputSchema = flattenOutputSchema(parsed) ?? NO_OUTPUT_SCHEMA_PLACEHOLDER;
+                } else {
+                    logWarn(`[ConnectorTool] Output schema declared for '${name}.${action.name}' but could not be read at '${action.outputSchemaPath}' or '${lsResult.outputSchemaPath}/${action.name}.json'`);
+                }
             }
         }
 
@@ -381,6 +392,7 @@ async function buildLSOperationDetails(
 
     // Process requested connections — return full connection objects with parameters.
     for (const reqConn of requestedConnections) {
+        ensureOperationNotAborted(mainAbortSignal, `reading connection '${name}.${reqConn}'`);
         const match = lsResult.connections.find(
             c => normalizeIdentifier(c.name) === reqConn
         );
@@ -708,9 +720,19 @@ export function createConnectorExecute(projectPath: string, mainAbortSignal?: Ab
             try {
                 ensureOperationNotAborted(mainAbortSignal, 'refreshing connector catalog');
                 const message = await renderCatalogOutput(projectPath);
+                // Re-check after the async call — the catalog fetch itself can
+                // block on HTTP, so we need a second checkpoint to detect an
+                // abort that fired during the await.
+                ensureOperationNotAborted(mainAbortSignal, 'refreshing connector catalog');
                 logDebug(`[ConnectorTool] Catalog refreshed`);
                 return { success: true, message };
             } catch (err) {
+                // Aborts must propagate so the agent run halts; converting
+                // them to a tool failure would feed the error back into the
+                // loop and risk a retry after the user already interrupted.
+                if (isOperationAbortedError(err)) {
+                    throw err;
+                }
                 const msg = err instanceof Error ? err.message : String(err);
                 return {
                     success: false,
@@ -891,6 +913,7 @@ export function createConnectorExecute(projectPath: string, mainAbortSignal?: Ab
                 requestedOperations,
                 requestedConnections,
                 warningSet,
+                mainAbortSignal,
             );
             message = detailPayload
                 ? `Connector details:\n\`\`\`json\n${JSON.stringify(detailPayload, null, 2)}\n\`\`\`\n`

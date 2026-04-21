@@ -735,10 +735,12 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
 
             case "abort":
                 // Abort acknowledged by backend. When the user clicked Interrupt the
-                // UI has already been finalized optimistically; this branch covers
-                // backend-initiated aborts (watchdog, rpc-manager catch). The helper
-                // is idempotent so the double-path is safe.
-                finalizeInterruptionUi();
+                // UI has already been finalized optimistically with the "by user"
+                // marker; this branch covers backend-initiated aborts (watchdog,
+                // rpc-manager catch) where we should use the neutral marker. The
+                // helper is idempotent and the marker check in finalizeInterruptionUi
+                // prevents stacking when both paths fire.
+                finalizeInterruptionUi(abortedRef.current ? 'user' : 'backend');
                 break;
 
             case "stop":
@@ -1003,7 +1005,7 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
         // The 'abort' event handler below remains a safety net for backend-
         // initiated aborts (watchdog timeout, etc.) and re-entry is idempotent.
         abortedRef.current = true;
-        finalizeInterruptionUi();
+        finalizeInterruptionUi('user');
 
         // Fire-and-forget the abort RPC so the backend can tear down in
         // parallel. Tools that honor mainAbortSignal (shell, maven build, web
@@ -1503,7 +1505,10 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
     // the backend replies) and backend-initiated aborts (watchdog timeout,
     // rpc-manager catch) delivered via the 'abort' event. Idempotent — safe to
     // call multiple times; re-runs skip appending the marker if already present.
-    const finalizeInterruptionUi = useCallback(() => {
+    // `origin` controls the inline marker so backend aborts don't falsely
+    // claim the user interrupted when they didn't.
+    const finalizeInterruptionUi = useCallback((origin: 'user' | 'backend' = 'user') => {
+        const marker = origin === 'user' ? '*[Interrupted by user]*' : '*[Interrupted]*';
         clearWorkingOnItTimer();
         clearWorkingOnItPlaceholder();
         setBackendRequestTriggered(false);
@@ -1525,12 +1530,12 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
                 .replace(/<toolcall data-loading="true"[^>]*>[^<]*<\/toolcall>/g, '')
                 .replace(/<bashoutput data-loading="true"[^>]*>[\s\S]*?<\/bashoutput>/g, '');
             content = content.trim();
-            if (content.endsWith("*[Interrupted by user]*")) {
+            // Either marker counts as "already finalized" — prevents the
+            // second path (user then backend, or vice versa) from stacking.
+            if (content.endsWith('*[Interrupted by user]*') || content.endsWith('*[Interrupted]*')) {
                 return prevMessages;
             }
-            content = content
-                ? content + "\n\n*[Interrupted by user]*"
-                : "*[Interrupted by user]*";
+            content = content ? content + '\n\n' + marker : marker;
             newMessages[lastIdx] = { ...lastMessage, content };
             return newMessages;
         });

@@ -523,6 +523,9 @@ script: `## Script Mediator — Deep Reference (GraalJS)
 
 The Script mediator runs inline code against the message context. The **GraalVM JS** engine (\`language="js"\`) is the default and ships with the runtime; the Nashorn engine is not bundled. Groovy (\`language="groovy"\`) and Ruby (\`language="rb"\`) are also supported, but **only when their optional runtime jars are present** on the MI classpath — drop \`groovy-all-2.4.4.jar\` or \`jruby-complete\` into \`<MI_HOME>/lib\` to enable them. Stick with \`language="js"\` unless there's a specific reason to pull in another runtime.
 
+### MI 4.5+ class-access sandbox
+GraalJS scripts run under a class-access policy. On MI 4.5+ access to \`java.lang\` (and other Java packages) is **blocked by default** — \`java.lang.Thread.sleep(ms)\`, \`java.lang.System.currentTimeMillis()\`, and similar calls will throw \`SynapseException\` unless the package is explicitly allowed via \`deployment.toml\` (\`[[script_mediator.allow_java_classes]]\` or equivalent \`ScriptAccessControl\` configuration). Prefer mediator-level patterns (e.g. the Iterate mediator for delays between retries) and avoid direct Java calls from scripts unless the deployment has been configured to permit them.
+
 ### XML Schema
 \`\`\`xml
 <!-- Inline script -->
@@ -556,7 +559,7 @@ GraalJS exposes Synapse types as **proxy objects**, not as JSON strings. Do NOT 
 - \`mc.setVariable(name, jsObj)\` stores primitives as **Java String**. To consume later as JSON, the downstream reader must \`JSON.parse\` the string (or use the variable mediator with \`type="JSON"\` and \`object(...)\`/\`array(...)\` — see the \`other\` section).
 - GraalJS proxy objects (returned by \`getPayloadJSON\`, or by \`getVariable\` for a JSON-typed variable) may not serialize cleanly with \`JSON.stringify\`. If you hit proxy serialization issues, round-trip through a plain object first: \`JSON.parse(JSON.stringify(proxy))\`.
 - \`responseVariable\` values produced by the HTTP connector are **Java \`LinkedHashMap\`** instances. From JS use \`.get("attributes")\`, \`.get("payload")\`, \`.get("headers")\` — dot notation does **not** work on Java maps.
-- \`java.lang.Thread.sleep(ms)\` is directly callable from GraalJS (useful for retry back-off inside a script). Prefer mediator-level patterns where possible.
+- \`java.lang.Thread.sleep(ms)\` and other \`java.lang\` calls are **blocked by default on MI 4.5+** (see "MI 4.5+ class-access sandbox" above). Prefer mediator-level patterns; only call into Java if the deployment explicitly allows the package via \`deployment.toml\`.
 
 ### Validated patterns
 \`\`\`xml
@@ -620,7 +623,7 @@ ForEach V2 iterates over a JSON array or XML nodes. **Both the parallel and sequ
 </foreach>
 \`\`\`
 
-Sequential vs parallel execution is controlled entirely by \`parallel-execution\` (default \`false\` = sequential). There is no separate \`sequential\` attribute; don't emit one.
+Sequential vs parallel execution is controlled entirely by \`parallel-execution\` (default \`true\` = parallel). Set \`parallel-execution="false"\` only when you need ordered iteration or \`counter-variable\` semantics. There is no separate \`sequential\` attribute; don't emit one.
 
 ### MessageContext isolation (critical)
 - Variables set via \`<variable>\` mediator or \`mc.setVariable(...)\` **inside an iteration do NOT persist** to the next iteration (sequential) or to the parent context (parallel).
