@@ -87,11 +87,33 @@ export function getToolAction(toolName: string, toolResult?: any, toolInput?: an
             return { loading: 'loading deep context', completed: 'loaded deep context', failed: 'failed to load deep context' };
 
         case MANAGE_CONNECTOR_TOOL_NAME: {
-            // Extract operation and artifact ids from tool input.
+            // Extract operation and artifact ids from tool input. The model
+            // occasionally emits a bare string, a single object, or null where
+            // we expect a string array — normalize defensively so the `allNames`
+            // spread doesn't blow up on `[...<non-iterable>]`.
             const operation = toolInput?.operation || 'managing';
             const isAdding = operation === 'add';
-            const connectorIds = toolInput?.connector_artifact_ids || [];
-            const inboundIds = toolInput?.inbound_artifact_ids || [];
+            const normalizeArtifactField = (value: unknown): string[] => {
+                if (value === null || value === undefined) return [];
+                if (Array.isArray(value)) {
+                    return value
+                        .map((v) =>
+                            typeof v === 'string'
+                                ? v
+                                : typeof v === 'object' && v !== null && typeof (v as { id?: unknown }).id === 'string'
+                                    ? (v as { id: string }).id
+                                    : String(v),
+                        )
+                        .filter((v): v is string => typeof v === 'string' && v.length > 0);
+                }
+                if (typeof value === 'string') return [value];
+                if (typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string') {
+                    return [(value as { id: string }).id];
+                }
+                return [String(value)];
+            };
+            const connectorIds = normalizeArtifactField(toolInput?.connector_artifact_ids);
+            const inboundIds = normalizeArtifactField(toolInput?.inbound_artifact_ids);
             const allNames = [...connectorIds, ...inboundIds];
             
             if (allNames.length > 0) {

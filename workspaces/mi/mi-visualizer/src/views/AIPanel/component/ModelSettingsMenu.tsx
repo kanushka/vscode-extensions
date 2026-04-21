@@ -366,7 +366,12 @@ const ModelSettingsMenu: React.FC<ModelSettingsMenuProps> = ({ isLoading, isByok
     const mainThumbPos = mainSelection === 'sonnet' ? 0 : 1;
     const subThumbPos = subSelection === 'haiku' ? 0 : 1;
 
-    const isDefault = mainSelection === DEFAULT_MAIN_PRESET && subSelection === DEFAULT_SUB_PRESET && !isThinkingEnabled;
+    const isDefault =
+        mainSelection === DEFAULT_MAIN_PRESET &&
+        subSelection === DEFAULT_SUB_PRESET &&
+        !modelSettings.mainModelCustomId &&
+        !modelSettings.subModelCustomId &&
+        !isThinkingEnabled;
     const mainPresetInfo = MAIN_PRESET_INFO[mainSelection];
     const subPresetInfo = SUB_PRESET_INFO[subSelection];
     const isUsingHighIntelligence = mainSelection === 'opus' || subSelection === 'sonnet';

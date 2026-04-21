@@ -85,33 +85,43 @@ export function AICodeGenerator({ isUsageExceeded = false }: AICodeGeneratorProp
   // Check if the chat is scrolled to the bottom
   useEffect(() => {
       const container = mainContainerRef.current;
-      if (container) {
-          const handleScroll = (event: Event) => {
-              // A user-initiated scroll (event.isTrusted=true) must always win
-              // over our programmatic-scroll suppression. Otherwise the user
-              // can get "stuck" at the bottom while streaming keeps restarting
-              // the suppression timer.
-              if (programmaticScrollRef.current) {
-                  if (!event.isTrusted) return;
-                  if (programmaticScrollTimerRef.current) {
-                      clearTimeout(programmaticScrollTimerRef.current);
-                      programmaticScrollTimerRef.current = null;
-                  }
-                  programmaticScrollRef.current = false;
-              }
-              const { scrollTop, scrollHeight, clientHeight } = container;
-              if (scrollHeight - scrollTop <= clientHeight + 50) {
-                  setIsAtBottom(true);
-              } else {
-                  setIsAtBottom(false);
-              }
-          };
+      if (!container) return;
 
-          container.addEventListener("scroll", handleScroll, { passive: true });
-          return () => {
-              container.removeEventListener("scroll", handleScroll);
-          };
-      }
+      const handleScroll = () => {
+          // Suppression is cleared by the explicit user-intent listeners below,
+          // so a real scroll seen while suppression is still active is some
+          // element's residual settle and can be ignored.
+          if (programmaticScrollRef.current) return;
+          const { scrollTop, scrollHeight, clientHeight } = container;
+          if (scrollHeight - scrollTop <= clientHeight + 50) {
+              setIsAtBottom(true);
+          } else {
+              setIsAtBottom(false);
+          }
+      };
+
+      // Explicit user-intent listeners. scrollIntoView emits trusted scroll
+      // events too, so `event.isTrusted` can't distinguish user vs programmatic
+      // scrolls. Wheel/touchstart/pointerdown are only ever fired by real user
+      // input, so we use them to cancel suppression immediately.
+      const cancelSuppression = () => {
+          if (programmaticScrollTimerRef.current) {
+              clearTimeout(programmaticScrollTimerRef.current);
+              programmaticScrollTimerRef.current = null;
+          }
+          programmaticScrollRef.current = false;
+      };
+
+      container.addEventListener("scroll", handleScroll, { passive: true });
+      container.addEventListener("wheel", cancelSuppression, { passive: true });
+      container.addEventListener("touchstart", cancelSuppression, { passive: true });
+      container.addEventListener("pointerdown", cancelSuppression, { passive: true });
+      return () => {
+          container.removeEventListener("scroll", handleScroll);
+          container.removeEventListener("wheel", cancelSuppression);
+          container.removeEventListener("touchstart", cancelSuppression);
+          container.removeEventListener("pointerdown", cancelSuppression);
+      };
   }, []);
 
   // Scroll to the bottom of the chat when new messages are added.

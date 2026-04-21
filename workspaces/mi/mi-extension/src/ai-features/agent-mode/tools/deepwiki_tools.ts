@@ -24,6 +24,7 @@ import { tool } from 'ai';
 import { createMCPClient } from '@ai-sdk/mcp';
 import { z } from 'zod';
 import { logDebug, logError, logInfo } from '../../copilot/logger';
+import { OperationAbortedError, isOperationAbortedError } from './abort-utils';
 import {
     DEEPWIKI_MCP_TOOL_NAME,
     DeepWikiAskQuestionExecuteFn,
@@ -100,11 +101,11 @@ function raceWithAbort<T>(promise: Promise<T>, signal: AbortSignal | undefined):
         return promise;
     }
     if (signal.aborted) {
-        return Promise.reject(Object.assign(new Error('DeepWiki request aborted.'), { name: 'AbortError' }));
+        return Promise.reject(new OperationAbortedError('waiting on DeepWiki MCP'));
     }
     return new Promise<T>((resolve, reject) => {
         const onAbort = () => {
-            reject(Object.assign(new Error('DeepWiki request aborted.'), { name: 'AbortError' }));
+            reject(new OperationAbortedError('waiting on DeepWiki MCP'));
         };
         signal.addEventListener('abort', onAbort, { once: true });
         promise.then(
@@ -168,11 +169,10 @@ export function createDeepWikiExecute(mainAbortSignal?: AbortSignal): DeepWikiAs
         }
 
         if (mainAbortSignal?.aborted) {
-            return {
-                success: false,
-                message: 'DeepWiki query aborted before dispatch.',
-                error: 'DEEPWIKI_ABORTED',
-            };
+            // Aborts must propagate — a tool-result "error" gets fed back into
+            // the agent loop and the agent may retry, but the run itself has
+            // already been cancelled upstream.
+            throw new OperationAbortedError('dispatching DeepWiki query');
         }
 
         let client: any;
@@ -180,27 +180,30 @@ export function createDeepWikiExecute(mainAbortSignal?: AbortSignal): DeepWikiAs
             logInfo('[DeepWikiTool] Querying DeepWiki MCP server');
             // raceWithAbort ensures the MCP handshake and tool discovery cancel
             // immediately on user abort, rather than blocking on network IO.
-            client = await raceWithAbort(
-                createMCPClient({
-                    transport: {
-                        type: 'http',
-                        url: DEEPWIKI_MCP_URL,
-                        redirect: 'error',
-                    },
-                }),
-                mainAbortSignal
-            );
+            // We still capture the client from the underlying promise via
+            // .then so that if raceWithAbort loses the race, a late-resolving
+            // MCP client is stored here and closed by the finally block — no
+            // connection leak.
+            const createPromise = createMCPClient({
+                transport: {
+                    type: 'http',
+                    url: DEEPWIKI_MCP_URL,
+                    redirect: 'error',
+                },
+            }).then((c: any) => {
+                client = c;
+                return c;
+            });
+            client = await raceWithAbort(createPromise, mainAbortSignal);
 
-            const tools = await raceWithAbort(
-                client.tools({
-                    schemas: {
-                        [DEEPWIKI_MCP_TOOL_NAME]: {
-                            inputSchema: deepWikiQuestionSchema,
-                        },
+            const toolsPromise = client.tools({
+                schemas: {
+                    [DEEPWIKI_MCP_TOOL_NAME]: {
+                        inputSchema: deepWikiQuestionSchema,
                     },
-                }),
-                mainAbortSignal
-            );
+                },
+            });
+            const tools = await raceWithAbort(toolsPromise, mainAbortSignal);
 
             const askQuestionTool = (tools as Record<string, any>)[DEEPWIKI_MCP_TOOL_NAME];
             if (!askQuestionTool || typeof askQuestionTool.execute !== 'function') {
@@ -222,13 +225,13 @@ export function createDeepWikiExecute(mainAbortSignal?: AbortSignal): DeepWikiAs
             }
             return result;
         } catch (error: any) {
-            if (error?.name === 'AbortError' || mainAbortSignal?.aborted) {
+            if (isOperationAbortedError(error) || mainAbortSignal?.aborted) {
                 logDebug('[DeepWikiTool] DeepWiki query aborted by user');
-                return {
-                    success: false,
-                    message: 'DeepWiki query aborted.',
-                    error: 'DEEPWIKI_ABORTED',
-                };
+                // Propagate aborts up the agent loop rather than returning a
+                // tool-result failure that could be interpreted as retryable.
+                throw isOperationAbortedError(error)
+                    ? error
+                    : new OperationAbortedError('running DeepWiki query');
             }
             logError('[DeepWikiTool] DeepWiki query failed', error);
             return {

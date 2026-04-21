@@ -255,16 +255,35 @@ function validateFilePathSecurity(
     // lexical check above passes. The containment check (isPathWithin /
     // isCopilotGlobalPath) is still restricted to write/strict mode because
     // reads may legitimately traverse outside the project tree.
+    //
+    // For writes (fullPath doesn't exist yet), walk up to the nearest existing
+    // parent and realpath *that*. Otherwise writes through a symlinked parent
+    // (e.g. `project/link/new.xml`) bypass containment entirely.
     let realTargetForChecks: string | undefined;
     try {
         if (fs.existsSync(fullPath)) {
             realTargetForChecks = fs.realpathSync(fullPath);
-            if (isSensitiveTokenName(realTargetForChecks)) {
-                return {
-                    valid: false,
-                    error: 'Access to sensitive credential paths (SSH keys, cloud credentials, .env files, shell rc files) is not allowed.'
-                };
+        } else {
+            let probe = path.dirname(fullPath);
+            const seenRoot = path.parse(probe).root;
+            while (!fs.existsSync(probe)) {
+                const parent = path.dirname(probe);
+                if (parent === probe || probe === seenRoot) {
+                    break;
+                }
+                probe = parent;
             }
+            if (fs.existsSync(probe)) {
+                const realParent = fs.realpathSync(probe);
+                const rel = path.relative(probe, fullPath);
+                realTargetForChecks = path.resolve(realParent, rel);
+            }
+        }
+        if (realTargetForChecks && isSensitiveTokenName(realTargetForChecks)) {
+            return {
+                valid: false,
+                error: 'Access to sensitive credential paths (SSH keys, cloud credentials, .env files, shell rc files) is not allowed.'
+            };
         }
     } catch {
         return {
@@ -1145,7 +1164,11 @@ export function createGrepExecute(projectPath: string): GrepExecuteFn {
         if (output_mode === 'files_with_matches') {
             rgArgs.push('-l');
         } else if (output_mode === 'count') {
-            rgArgs.push('-c');
+            // --with-filename forces `file:count` output even when rg is run
+            // against a single file; parseRgCountOutput needs the `file:` prefix
+            // on every line, otherwise single-file searches silently drop the
+            // result (lastIndexOf(':') is negative on a bare number).
+            rgArgs.push('-c', '--with-filename');
         } else {
             // content mode — use --json for structured parsing of matches + context events
             rgArgs.push('--json');

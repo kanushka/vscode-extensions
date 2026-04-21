@@ -192,11 +192,14 @@ export function createManageConnectorExecute(
 
             for (const { id: itemId, type: itemType } of allIds) {
                 ensureOperationNotAborted(mainAbortSignal, `processing ${itemType} ${itemId}`);
-                // Reject bundled inbound ids early — they can't be added to pom.xml.
-                if (itemType === 'inbound' && classifyIdentifier(itemId) === 'bundled-inbound') {
+                // Reject bundled inbound ids early regardless of which bucket
+                // the agent placed them in. They can't be added to pom.xml, and
+                // sliding one into `connector_artifact_ids` shouldn't bypass
+                // this guard.
+                if (classifyIdentifier(itemId) === 'bundled-inbound') {
                     results.push({
                         name: itemId,
-                        type: 'inbound',
+                        type: itemType,
                         success: false,
                         error: `'${itemId}' is a bundled inbound endpoint shipped with the MI runtime — no need to add it to pom.xml. Use get_connector_info({artifact_id: "${itemId}"}) to read its parameters directly.`,
                     });
@@ -287,7 +290,7 @@ export function createManageConnectorExecute(
                     });
                 }
 
-                logDebug(`[${toolName}] Removed ${successful.length}/${connector_artifact_ids.length + inbound_artifact_ids.length} items`);
+                logDebug(`[${toolName}] Removed ${successful.length}/${allIds.length} items`);
             }
 
             if (failed.length > 0) {
@@ -303,6 +306,12 @@ export function createManageConnectorExecute(
                 message: message.trim()
             };
         } catch (error) {
+            // User-initiated aborts must propagate. Wrapping them in a regular
+            // tool failure result would hide the cancel from the agent loop
+            // and allow it to "recover" after the user already hit stop.
+            if (isOperationAbortedError(error)) {
+                throw error;
+            }
             logError(`[${toolName}] Error ${isAdd ? 'adding' : 'removing'} items: ${error instanceof Error ? error.message : String(error)}`);
             return {
                 success: false,

@@ -342,11 +342,14 @@ async function buildLSOperationDetails(
             // file path to the per-operation schema. Falling back to the
             // connector-level directory + <action.name>.json only covers
             // connectors that follow the default layout; some connectors ship
-            // schemas at non-standard locations.
-            let parsed = await readOutputSchemaFile(action.outputSchemaPath);
+            // schemas at non-standard locations. In both cases the read is
+            // constrained to the connector-level outputSchemaPath directory so
+            // a rogue per-op path can't escape via symlink.
+            const schemaBaseDir = lsResult.outputSchemaPath || '';
+            let parsed = await readOutputSchemaFile(action.outputSchemaPath, schemaBaseDir || undefined);
             if (parsed === null) {
                 parsed = await readOutputSchema(
-                    lsResult.outputSchemaPath || '',
+                    schemaBaseDir,
                     action.name
                 );
             }

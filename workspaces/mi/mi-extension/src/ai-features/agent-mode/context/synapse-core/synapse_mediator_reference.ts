@@ -521,7 +521,7 @@ Inside templates, parameters are accessed via \`\${params.functionParams.paramNa
 
 script: `## Script Mediator — Deep Reference (GraalJS)
 
-The Script mediator runs inline JavaScript against the message context via **GraalVM JS** (the Nashorn engine is not bundled; Groovy is **not** available in MI). Use \`language="js"\`.
+The Script mediator runs inline code against the message context. The **GraalVM JS** engine (\`language="js"\`) is the default and ships with the runtime; the Nashorn engine is not bundled. Groovy (\`language="groovy"\`) and Ruby (\`language="rb"\`) are also supported, but **only when their optional runtime jars are present** on the MI classpath — drop \`groovy-all-2.4.4.jar\` or \`jruby-complete\` into \`<MI_HOME>/lib\` to enable them. Stick with \`language="js"\` unless there's a specific reason to pull in another runtime.
 
 ### XML Schema
 \`\`\`xml
@@ -610,7 +610,6 @@ ForEach V2 iterates over a JSON array or XML nodes. **Both the parallel and sequ
 <foreach
     collection="\${payload.items}"
     parallel-execution="false|true"
-    sequential="true|false"
     [counter-variable="i"]
     update-original="true|false"
     [result-content-type="JSON|XML"]
@@ -620,6 +619,8 @@ ForEach V2 iterates over a JSON array or XML nodes. **Both the parallel and sequ
   </sequence>
 </foreach>
 \`\`\`
+
+Sequential vs parallel execution is controlled entirely by \`parallel-execution\` (default \`false\` = sequential). There is no separate \`sequential\` attribute; don't emit one.
 
 ### MessageContext isolation (critical)
 - Variables set via \`<variable>\` mediator or \`mc.setVariable(...)\` **inside an iteration do NOT persist** to the next iteration (sequential) or to the parent context (parallel).
@@ -757,7 +758,7 @@ call_send_loopback: `## \`<call>\` vs \`<send>\` vs \`<loopback/>\` — Flow Sem
 \`\`\`
 - Fire-and-forget at the mediator level. When the endpoint is 2-way (most HTTP), the response flows into the **outSequence** of the enclosing API \`<resource>\` / \`<proxy>\` \`<target>\`. Inside a sequence with no out-sequence wiring, the response is effectively dropped.
 - \`<send/>\` (no endpoint child) — sends to the endpoint implied by \`To\` header / WS-Addressing. Used in out-sequences to forward the response back to the client.
-- After \`<send>\`, mediators **in the same sequence** still execute (the send thread doesn't block), but any payload they operate on is the request, not the response.
+- **Send terminates sequence execution**: mediators placed after \`<send>\` in the same sequence are NOT processed. Responses for 2-way endpoints still flow into the enclosing API/proxy/resource \`outSequence\` as described above.
 
 ### \`<call [blocking="false"]>\` — synchronous request/reply
 \`\`\`xml

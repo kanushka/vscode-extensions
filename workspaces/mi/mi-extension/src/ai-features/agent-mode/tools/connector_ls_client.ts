@@ -21,6 +21,7 @@ import * as path from 'path';
 import { GetInboundInfoRequest } from '@wso2/mi-core';
 import { MILanguageClient } from '../../../lang-client/activator';
 import { logDebug, logWarn } from '../../copilot/logger';
+import { isOperationAbortedError } from './abort-utils';
 
 // ============================================================================
 // Types — connector path
@@ -230,6 +231,12 @@ export async function getConnectorInfoFromLS(
         }
         return mapped;
     } catch (error) {
+        // User-initiated aborts must propagate — collapsing them into an
+        // { error } envelope would leave the agent thinking the LS refused the
+        // request and it could reasonably retry.
+        if (isOperationAbortedError(error)) {
+            throw error;
+        }
         const msg = error instanceof Error ? error.message : String(error);
         logWarn(`[ConnectorLSClient] getConnectorInfo threw for ${artifactId}:${version}: ${msg}`);
         return { error: msg };
@@ -260,6 +267,9 @@ export async function getInboundInfoFromLS(
         }
         return mapped;
     } catch (error) {
+        if (isOperationAbortedError(error)) {
+            throw error;
+        }
         const msg = error instanceof Error ? error.message : String(error);
         logWarn(`[ConnectorLSClient] getInboundInfo threw: ${msg}`);
         return { error: msg };
@@ -267,16 +277,52 @@ export async function getInboundInfoFromLS(
 }
 
 /**
+ * Resolve realpath for a candidate file, returning null on ENOENT. Used to
+ * canonicalize before containment checks so a symlink target is verified, not
+ * just the lexical path.
+ */
+async function tryRealpath(candidate: string): Promise<string | null> {
+    try {
+        return await fs.promises.realpath(candidate);
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {
+            return null;
+        }
+        throw error;
+    }
+}
+
+/**
  * Read an output schema JSON from a direct file path. Used when an operation
  * declares its own `outputSchemaPath` (a full path to the schema file) — in
  * that case we should NOT re-derive the path from the connector-level dir +
- * operation name.
+ * operation name. When `allowedBaseDir` is provided, we verify via realpath
+ * that the file resolves inside it so a symlink target outside the connector
+ * extraction dir is refused.
  */
-export async function readOutputSchemaFile(filePath: string): Promise<any | null> {
+export async function readOutputSchemaFile(
+    filePath: string,
+    allowedBaseDir?: string
+): Promise<any | null> {
     if (!filePath) {
         return null;
     }
     try {
+        if (allowedBaseDir) {
+            const realFile = await tryRealpath(filePath);
+            if (!realFile) {
+                return null; // ENOENT — no schema for this op.
+            }
+            const realBase = await tryRealpath(allowedBaseDir);
+            if (!realBase) {
+                logDebug(`[ConnectorLSClient] allowedBaseDir '${allowedBaseDir}' does not exist; refusing to read '${filePath}'`);
+                return null;
+            }
+            if (realFile !== realBase && !realFile.startsWith(realBase + path.sep)) {
+                logDebug(`[ConnectorLSClient] Refusing to read '${filePath}' — realpath '${realFile}' is outside '${realBase}'`);
+                return null;
+            }
+        }
         const content = await fs.promises.readFile(filePath, 'utf-8');
         return JSON.parse(content);
     } catch (error) {
@@ -306,9 +352,21 @@ export async function readOutputSchema(
         return null;
     }
     try {
-        // Use non-blocking fs; catch ENOENT as "no schema for this op" (legacy
-        // connectors simply don't ship per-action schemas).
-        const content = await fs.promises.readFile(schemaPath, 'utf-8');
+        // Canonicalize via realpath so a symlink can't escape the directory
+        // even though the lexical check above passed.
+        const realDir = await tryRealpath(resolvedDir);
+        if (!realDir) {
+            return null;
+        }
+        const realPath = await tryRealpath(schemaPath);
+        if (!realPath) {
+            return null; // ENOENT — no schema for this op.
+        }
+        if (realPath !== realDir && !realPath.startsWith(realDir + path.sep)) {
+            logDebug(`[ConnectorLSClient] Refusing to read output schema — realpath '${realPath}' is outside '${realDir}'`);
+            return null;
+        }
+        const content = await fs.promises.readFile(realPath, 'utf-8');
         return JSON.parse(content);
     } catch (error) {
         if ((error as NodeJS.ErrnoException)?.code === 'ENOENT') {

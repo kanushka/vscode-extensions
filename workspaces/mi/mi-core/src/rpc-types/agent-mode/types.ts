@@ -230,6 +230,12 @@ export interface AgentEvent {
     type: AgentEventType;
     /** Monotonic sequence number assigned by the event handler (used for polling dedup) */
     seq?: number;
+    /**
+     * Stable UI chat id the event belongs to. Stamped on every event at
+     * emit time so the frontend can drop late events from a previously
+     * interrupted run after a new run has already started.
+     */
+    chatId?: number;
     content?: string;
     /** Thinking block ID for thinking_* events */
     thinkingId?: string;

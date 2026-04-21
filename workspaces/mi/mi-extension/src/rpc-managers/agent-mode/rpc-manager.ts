@@ -725,7 +725,7 @@ export class MIAgentPanelRpcManager implements MIAgentPanelAPI {
         let activeCheckpointId: string | undefined;
         try {
             beginServerManagementRunTracking();
-            this.eventHandler.beginRun();
+            this.eventHandler.beginRun(request.chatId);
             const messageLength = typeof request.message === 'string' ? request.message.length : 0;
             logInfo(
                 `[AgentPanel] Received message request (chatId=${request.chatId}, mode=${request.mode || this.currentMode || DEFAULT_AGENT_MODE}, messageLength=${messageLength})`

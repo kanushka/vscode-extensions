@@ -375,6 +375,11 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
     const isResponseReceived = useRef(false);
     const textAreaRef = useRef<HTMLTextAreaElement>(null);
     const abortedRef = useRef(false);
+    // chatId of the currently-running (or most-recently-started) agent turn.
+    // Any inbound event stamped with a different chatId belongs to a prior
+    // interrupted run and must be ignored, otherwise late content_block /
+    // tool_result events would bleed into the new conversation.
+    const activeRunChatIdRef = useRef<number | undefined>(undefined);
     const lastUserPromptRef = useRef<string>("");
     const [isFocused, setIsFocused] = useState(false);
     const isDarkMode = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
@@ -509,6 +514,19 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
             if (event.type === 'stop' || event.type === 'error' || event.type === 'abort') {
                 terminalEventReceivedRef.current = true;
             }
+        }
+
+        // Drop events stamped with a prior run's chatId. Without this, a
+        // content_block / tool_result that arrives after the user interrupted
+        // and started a new turn would render into the fresh conversation.
+        // Done before the abortedRef guard because the ref is reset when the
+        // new run begins and would no longer protect us.
+        if (
+            event.chatId !== undefined &&
+            activeRunChatIdRef.current !== undefined &&
+            event.chatId !== activeRunChatIdRef.current
+        ) {
+            return;
         }
 
         // Ignore all events if generation was aborted by the user. The UI has
@@ -1151,6 +1169,10 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
             ? crypto.randomUUID()
             : `checkpoint-${Date.now()}-${Math.random().toString(16).slice(2)}`;
         setCurrentChatId(chatId);
+        // Remember this run's chatId so handleAgentEvent can drop any
+        // late events stamped with a prior chatId after the user interrupted
+        // and started a fresh turn.
+        activeRunChatIdRef.current = chatId;
 
         const updateChats = (userPrompt: string, userMessageType?: MessageType, checkpointAnchorId?: string) => {
             // Store the user prompt for potential abort restoration
