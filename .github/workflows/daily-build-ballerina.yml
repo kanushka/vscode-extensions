@@ -193,13 +193,29 @@ jobs:
           path: ${{ steps.vsix.outputs.fileName }}
           retention-days: 30
 
-    outputs:
-      version: ${{ steps.version.outputs.version }}
-      vsixFileName: ${{ steps.vsix.outputs.fileName }}
-      lsVersion: ${{ steps.ls.outputs.lsVersion }}
-      lsArtifactName: ${{ steps.ls.outputs.lsArtifactName }}
-      productIntegratorBranch: ${{ steps.config.outputs.productIntegratorBranch }}
-      branchSlug: ${{ steps.slug.outputs.slug }}
+      # Per-branch metadata artifact. Matrix-aggregated `needs.Build.outputs.*` is last-writer-wins
+      # in GitHub Actions, so downstream matrix legs cannot rely on it for per-leg values. Each
+      # leg uploads its own metadata file keyed by branch slug; downstream legs download the
+      # matching one.
+      - name: Write build metadata
+        run: |
+          mkdir -p build-metadata
+          cat > build-metadata/build.env <<EOF
+          version=${{ steps.version.outputs.version }}
+          vsixFileName=${{ steps.vsix.outputs.fileName }}
+          lsVersion=${{ steps.ls.outputs.lsVersion }}
+          lsArtifactName=${{ steps.ls.outputs.lsArtifactName }}
+          productIntegratorBranch=${{ steps.config.outputs.productIntegratorBranch }}
+          vscodeBranch=${{ matrix.vscodeBranch }}
+          branchSlug=${{ steps.slug.outputs.slug }}
+          EOF
+
+      - name: Upload build metadata artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ballerina-daily-metadata-${{ steps.slug.outputs.slug }}
+          path: build-metadata/build.env
+          retention-days: 30
 
   Release:
     name: Release (${{ matrix.vscodeBranch }})
@@ -222,11 +238,26 @@ jobs:
         with:
           name: ballerina-daily-vsix-${{ steps.slug.outputs.slug }}
 
+      - name: Download build metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ballerina-daily-metadata-${{ steps.slug.outputs.slug }}
+          path: build-metadata
+
+      - name: Load build metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          while IFS='=' read -r key value; do
+            [[ -z "${key// /}" || "$key" =~ ^[[:space:]]*# ]] && continue
+            echo "${key}=${value}" >> "$GITHUB_OUTPUT"
+          done < build-metadata/build.env
+
       - name: Create release on wso2/ballerina-vscode
         env:
           GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
-          NEW_VERSION: ${{ needs.Build.outputs.version }}
-          LS_VERSION: ${{ needs.Build.outputs.lsVersion }}
+          NEW_VERSION: ${{ steps.meta.outputs.version }}
+          LS_VERSION: ${{ steps.meta.outputs.lsVersion }}
           SOURCE_BRANCH: ${{ matrix.vscodeBranch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -296,42 +327,39 @@ jobs:
           - main
           - release/bi-1.8.x
     steps:
-      - name: Checkout vscode-extensions branch (for config)
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ matrix.vscodeBranch }}
-          path: vscode-extensions
+      - name: Slugify branch name
+        id: slug
+        run: echo "slug=$(echo '${{ matrix.vscodeBranch }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
 
-      - name: Load per-branch config
-        id: config
+      - name: Download build metadata artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: ballerina-daily-metadata-${{ steps.slug.outputs.slug }}
+          path: build-metadata
+
+      - name: Load build metadata
+        id: meta
         run: |
           set -euo pipefail
-          CONFIG=vscode-extensions/.github/daily-build/release.properties
-          if [ ! -f "$CONFIG" ]; then
-            echo "::error::Missing $CONFIG on branch ${{ matrix.vscodeBranch }}"
-            exit 1
-          fi
           while IFS='=' read -r key value; do
             [[ -z "${key// /}" || "$key" =~ ^[[:space:]]*# ]] && continue
-            key="${key// /}"
-            value="${value## }"; value="${value%% }"
             echo "${key}=${value}" >> "$GITHUB_OUTPUT"
-          done < "$CONFIG"
+          done < build-metadata/build.env
 
       - name: Checkout product-integrator
         uses: actions/checkout@v4
         with:
           repository: wso2/product-integrator
-          ref: ${{ steps.config.outputs.productIntegratorBranch }}
+          ref: ${{ steps.meta.outputs.productIntegratorBranch }}
           token: ${{ secrets.CHOREO_BOT_TOKEN }}
           path: product-integrator
 
       - name: Update ballerina.extension.version and open PR
         working-directory: product-integrator
         env:
-          NEW_VERSION: ${{ needs.Build.outputs.version }}
+          NEW_VERSION: ${{ steps.meta.outputs.version }}
           GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
-          BASE_BRANCH: ${{ steps.config.outputs.productIntegratorBranch }}
+          BASE_BRANCH: ${{ steps.meta.outputs.productIntegratorBranch }}
           SOURCE_BRANCH: ${{ matrix.vscodeBranch }}
         run: |
           set -euo pipefail
