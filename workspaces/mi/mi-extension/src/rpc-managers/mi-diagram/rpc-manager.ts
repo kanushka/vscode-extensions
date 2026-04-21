@@ -390,14 +390,61 @@ export class MiDiagramRpcManager implements MiDiagramAPI {
     async saveInputPayload(params: SavePayloadRequest): Promise<boolean> {
         return new Promise((resolve) => {
             const { name, type, key } = this.getResourceInfoToSavePayload(params.artifactModel);
-            let content;
-            if (type == "API") {
-                content = this.readInputPayloadFile(name) ?? { type };
-                content[key] = { requests: params.payload };
-                content[key].defaultRequest = params.defaultPayload;
+
+            let content = this.readInputPayloadFile(name) ?? { type };
+
+            let payloadArray: any[];
+            try {
+                payloadArray = typeof params.payload === "string"
+                    ? JSON.parse(params.payload)
+                    : params.payload;
+            } catch {
+                resolve(false);
+                return;
+            }
+            if (!Array.isArray(payloadArray)) {
+                resolve(false);
+                return;
+            }
+
+            const sharedRequests = payloadArray.filter((p: any) => p.sharePayload);
+            const scopedRequests = payloadArray.filter((p: any) => !p.sharePayload);
+
+            const stripFlag = (arr: any[]) => arr.map(({ sharePayload, ...rest }) => rest);
+
+            const cleanShared = stripFlag(sharedRequests);
+            const cleanScoped = stripFlag(scopedRequests);
+
+            if (type === "API") {
+                // Shared (top-level) — NO defaultRequest
+                if (cleanShared.length > 0) {
+                    content.requests = cleanShared;
+                    if (content.defaultRequest) {
+                        delete content.defaultRequest;
+                    }
+                } else {
+                    content.requests = [];
+                }
+
+                // Scoped — keeps defaultRequest
+                if (cleanScoped.length > 0) {
+                    content[key] = content[key] ?? {};
+                    content[key].requests = cleanScoped;
+                } else {
+                    if (content[key]) {
+                        content[key].requests = [];
+                    }
+                }
+
+                // Always update defaultRequest for this resource key, even when there are no scoped requests
+                if (params.defaultPayload !== undefined) {
+                    content[key] = content[key] ?? {};
+                    content[key].defaultRequest = params.defaultPayload;
+                }
+
             } else {
                 content = { type };
-                content.requests = params.payload;
+                content.requests = stripFlag(payloadArray);
                 content.defaultRequest = params.defaultPayload;
             }
             const tryout = path.join(this.projectUri, ".tryout");
@@ -436,14 +483,23 @@ export class MiDiagramRpcManager implements MiDiagramAPI {
             const { name, type, key } = this.getResourceInfoToSavePayload(params.artifactModel);
             const allPayloads = this.readInputPayloadFile(name);
             if (allPayloads) {
-                let defaultPayload;
-                let payloads;
-                if (type == "API") {
-                    payloads = allPayloads[key]?.requests ?? [];
-                    defaultPayload = allPayloads[key]?.defaultRequest ?? "";
+                let payloads: any[] = [];
+                let defaultPayload = "";
+
+                if (type === "API") {
+                    const sharedPayloads = (allPayloads.requests ?? []).map((p: any) => ({
+                        ...p,
+                        sharePayload: true
+                    }));
+                    const scopedPayloads = (allPayloads[key]?.requests ?? []).map((p: any) => ({
+                        ...p,
+                        sharePayload: false
+                    }));
+                    payloads = [...sharedPayloads, ...scopedPayloads];
+                    defaultPayload = allPayloads[key]?.defaultRequest ?? allPayloads.defaultRequest ?? "";
                 } else {
                     payloads = allPayloads.requests ?? [];
-                    defaultPayload = allPayloads.defaultRequest;
+                    defaultPayload = allPayloads.defaultRequest ?? "";
                 }
                 resolve({ payloads, defaultPayload });
             } else {
@@ -470,8 +526,10 @@ export class MiDiagramRpcManager implements MiDiagramAPI {
                         Object.keys(fileContent).forEach((key) => {
                             if (key.startsWith("/")) { // Select only API resources
                                 const defaultRequestName = fileContent[key].defaultRequest;
-                                const defaultRequest = fileContent[key].requests.find((request: any) => request.name === defaultRequestName);
-                                payloadMapByResource[key] = defaultRequest ? defaultRequest : null;
+                                const defaultRequest =
+                                    (fileContent[key].requests ?? []).find((request: any) => request.name === defaultRequestName)
+                                    ?? (fileContent.requests ?? []).find((request: any) => request.name === defaultRequestName);
+                                payloadMapByResource[key] = defaultRequest ?? null;
                             }
                         });
                         payloadMapByArtifact[fileNameWithoutExtension] = payloadMapByResource;
