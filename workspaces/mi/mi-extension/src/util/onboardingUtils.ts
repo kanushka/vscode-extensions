@@ -1026,6 +1026,15 @@ function setupConfigFiles(projectUri: string): void {
     }
 }
 
+export function getProjectJavaVersion(projectUri: string): string | null {
+    const config = vscode.workspace.getConfiguration('MI', vscode.Uri.file(projectUri));
+    const javaHome = config.get<string>(SELECTED_JAVA_HOME);
+    if (!javaHome) {
+        return null;
+    }
+    return getJavaVersion(path.join(javaHome, 'bin'));
+}
+
 export function getJavaHomeFromConfig(projectUri: string): string | undefined {
     const config = vscode.workspace.getConfiguration('MI', vscode.Uri.file(projectUri));
     const currentJavaHome = config.get<string>(SELECTED_JAVA_HOME);
@@ -1076,8 +1085,39 @@ export function getDefaultProjectPath(): string {
 }
 
 export async function buildBallerinaModule(projectPath: string) {
+    const MIN_REQUIRED_UPDATE = 13;
     const isBallerinaInstalled = await isBallerinaAvailableGlobally();
-    if (isBallerinaInstalled || fs.existsSync(path.join(os.homedir(), '.ballerina', 'ballerina-home', 'bin', process.platform === 'win32' ? 'bal.bat' : 'bal'))) {
+    const isLocalBallerina = fs.existsSync(path.join(os.homedir(), '.ballerina', 'ballerina-home', 'bin', process.platform === 'win32' ? 'bal.bat' : 'bal'));
+
+    if (isBallerinaInstalled || isLocalBallerina) {
+        const updateNumber = await getBallerinaVersion(isBallerinaInstalled);
+
+        if (updateNumber !== null && updateNumber < MIN_REQUIRED_UPDATE) {
+            const selection = await vscode.window.showWarningMessage(
+                `Ballerina Swan Lake Update ${updateNumber} is installed, but Update ${MIN_REQUIRED_UPDATE} or higher is required. Would you like to update Ballerina now?`,
+                { modal: true },
+                'Update'
+            );
+
+            if (selection !== 'Update') {
+                vscode.window.showErrorMessage(`Ballerina Update ${MIN_REQUIRED_UPDATE} or higher is required. Build process stopped.`);
+                return;
+            }
+
+            let updateSucceeded = false;
+            await vscode.window.withProgress(
+                { location: vscode.ProgressLocation.Notification, title: 'Updating Ballerina...', cancellable: false },
+                async () => {
+                    updateSucceeded = await updateBallerinaDistribution(isBallerinaInstalled);
+                }
+            );
+
+            if (!updateSucceeded) {
+                vscode.window.showErrorMessage('Failed to update Ballerina. Please update manually and try again.');
+                return;
+            }
+        }
+
         await runBallerinaBuildsWithProgress(projectPath, isBallerinaInstalled);
     } else {
         vscode.window.showErrorMessage('Ballerina not found. Please download Ballerina and try again.');
@@ -1124,8 +1164,8 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
 
             // Use global bal if installed, otherwise use local installation
             const pullCommand = isBallerinaInstalled 
-                ? (isWindows ? 'bal.bat tool pull mi-module-gen' : 'bal tool pull mi-module-gen')
-                : `${quotedBalCommand} tool pull mi-module-gen`;
+                ? (isWindows ? 'bal.bat tool pull migen' : 'bal tool pull migen')
+                : `${quotedBalCommand} tool pull migen`;
 
             console.debug('[Ballerina Build] Command to execute:', pullCommand);
             console.debug('[Ballerina Build] Working directory:', quotedProjectPath);
@@ -1154,6 +1194,14 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                 if (data) {
                     // Convert data to string with simplified logic
                     const errorMessage: string = data?.toString?.() ?? String(data);
+
+                    // Ignore Java logging warnings written to stderr (e.g. StAX dialect warnings)
+                    if (/^\w{3} \d{1,2}, \d{4}.*\n?WARNING:/m.test(errorMessage) ||
+                        /^WARNING:/m.test(errorMessage) ||
+                        errorMessage.trim() === '') {
+                        console.debug('[Ballerina Build] Ignoring stderr warning:', errorMessage.trim());
+                        return;
+                    }
 
                     console.debug('[Ballerina Build] Error encountered:', errorMessage);
                     const commonErrors = [
@@ -1198,9 +1246,9 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                 }
                 ballerinaOutputChannel.clear();
                 const isWindows = process.platform === 'win32';
-                const moduleGenCommand = isBallerinaInstalled 
-                    ? (isWindows ? 'bal.bat mi-module-gen -i .' : 'bal mi-module-gen -i .') 
-                    : `${path.join(balHome, isWindows ? 'bal.bat' : 'bal')} mi-module-gen -i .`;
+                const moduleGenCommand = isBallerinaInstalled
+                    ? (isWindows ? 'bal.bat migen module' : 'bal migen module')
+                    : `${path.join(balHome, isWindows ? 'bal.bat' : 'bal')} migen module`;
 
                 console.debug('Running module gen command:', moduleGenCommand, 'in directory:', projectPath);
                 runBasicCommand(moduleGenCommand, projectPath,
@@ -1221,13 +1269,6 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                             console.debug('[Ballerina Build] Build output directory not found:', buildOutput);
                             reject();
                             return vscode.window.showErrorMessage("Ballerina module build process failed - no output generated.");
-                        }
-
-                        // Clean up old target folder if it exists
-                        const targetFolderPath = path.join(projectPath, 'target');
-                        if (fs.existsSync(targetFolderPath)) {
-                            console.debug('[Ballerina Build] Cleaning up old target folder');
-                            fs.rmSync(targetFolderPath, { recursive: true, force: true });
                         }
 
                         console.debug('[Ballerina Build] Reading module configuration');
@@ -1253,7 +1294,7 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                         console.debug('[Ballerina Build] Module name:', name, 'version:', version);
 
                         const zipName = name + "-connector-" + version + ".zip";
-                        const zipPath = path.join(projectPath, zipName);
+                        const zipPath = path.join(projectPath, "target", "mi", zipName);
                         console.debug('[Ballerina Build] Generated zip path:', zipPath);
 
                         const projectUri = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(projectPath))?.uri?.fsPath;
@@ -1269,8 +1310,12 @@ async function runBallerinaBuildsWithProgress(projectPath: string, isBallerinaIn
                             // https://github.com/wso2/mi-vscode/issues/952
                             await new Promise((resolve) => setTimeout(resolve, 1000));
                         }
+                        if (!fs.existsSync(zipPath)) {
+                            reject();
+                            return vscode.window.showErrorMessage(`Ballerina module build failed - output zip not found at ${zipPath}.`);
+                        }
                         await fs.promises.copyFile(zipPath, copyTo);
-                        await fs.promises.rm(zipPath);
+                        fs.rmSync(path.join(projectPath, 'target'), { recursive: true, force: true });
 
                         progress.report({ increment: 10, message: "Completed Ballerina module build." });
                         vscode.window.showInformationMessage("Ballerina module build successful");
@@ -1306,6 +1351,53 @@ async function isBallerinaAvailableGlobally(): Promise<boolean> {
         const proc = child_process.spawn("bal version", [], { shell: true });
         proc.on("error", () => resolve(false));
         proc.on("exit", (code) => resolve(code === 0));
+    });
+}
+
+// Returns the Swan Lake update number (e.g. 13 for version 2201.13.x), or null if it cannot be determined.
+async function getBallerinaVersion(isBallerinaInstalledGlobally: boolean): Promise<number | null> {
+    return new Promise<number | null>((resolve) => {
+        const isWindows = process.platform === 'win32';
+        let command: string;
+
+        if (isBallerinaInstalledGlobally) {
+            command = isWindows ? 'bal.bat version' : 'bal version';
+        } else {
+            const balHome = path.normalize(path.join(os.homedir(), '.ballerina', 'ballerina-home', 'bin'));
+            const balExecutable = isWindows ? 'bal.bat' : 'bal';
+            const balCommand = path.join(balHome, balExecutable);
+            command = `"${balCommand}" version`;
+        }
+
+        const proc = child_process.spawn(command, [], { shell: true });
+        let output = '';
+        proc.stdout?.on('data', (data: Buffer) => { output += data.toString(); });
+        proc.on('error', () => resolve(null));
+        proc.on('close', () => {
+            // Matches version strings like "Ballerina 2201.13.0 (Swan Lake Update 13)"
+            const match = output.match(/Ballerina\s+2201\.(\d+)\.\d+/);
+            resolve(match ? parseInt(match[1], 10) : null);
+        });
+    });
+}
+
+async function updateBallerinaDistribution(isBallerinaInstalledGlobally: boolean): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+        const isWindows = process.platform === 'win32';
+        let command: string;
+
+        if (isBallerinaInstalledGlobally) {
+            command = isWindows ? 'bal.bat dist update' : 'bal dist update';
+        } else {
+            const balHome = path.normalize(path.join(os.homedir(), '.ballerina', 'ballerina-home', 'bin'));
+            const balExecutable = isWindows ? 'bal.bat' : 'bal';
+            const balCommand = path.join(balHome, balExecutable);
+            command = `"${balCommand}" dist update`;
+        }
+
+        const proc = child_process.spawn(command, [], { shell: true });
+        proc.on('error', () => resolve(false));
+        proc.on('close', (code) => resolve(code === 0));
     });
 }
 

@@ -350,7 +350,7 @@ import { replaceFullContentToFile, saveIdpSchemaToFile } from "../../util/worksp
 import { VisualizerWebview, webviews } from "../../visualizer/webview";
 import path = require("path");
 import { importCapp } from "../../util/importCapp";
-import { compareVersions, filterConnectorVersion, generateInitialDependencies, getDefaultProjectPath, getMIVersionFromPom, buildBallerinaModule, updatePomForClassMediator, isConsolidatedProject } from "../../util/onboardingUtils";
+import { compareVersions, filterConnectorVersion, generateInitialDependencies, getDefaultProjectPath, getMIVersionFromPom, buildBallerinaModule, updatePomForClassMediator, isConsolidatedProject, getProjectJavaVersion } from "../../util/onboardingUtils";
 import { Range as STRange } from '@wso2/mi-syntax-tree/lib/src';
 import { checkForDevantExt } from "../../extension";
 import { getAPIMetadata } from "../../util/template-engine/mustach-templates/API";
@@ -514,7 +514,8 @@ export class MiDiagramRpcManager implements MiDiagramAPI {
     async getMIVersionFromPom(): Promise<MiVersionResponse> {
         return new Promise(async (resolve) => {
             const res = await getMIVersionFromPom(this.projectUri);
-            resolve({ version: res ?? '' });
+            const javaVersion = getProjectJavaVersion(this.projectUri) ?? undefined;
+            resolve({ version: res ?? '', javaVersion });
         });
     }
 
