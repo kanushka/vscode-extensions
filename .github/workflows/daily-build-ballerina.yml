@@ -36,13 +36,21 @@ jobs:
             echo "::error::Missing $CONFIG on branch ${{ matrix.vscodeBranch }}"
             exit 1
           fi
+          declare -A parsed=()
           while IFS='=' read -r key value; do
             [[ -z "${key// /}" || "$key" =~ ^[[:space:]]*# ]] && continue
             key="${key// /}"
             value="${value## }"; value="${value%% }"
+            parsed["$key"]="$value"
             echo "${key}=${value}"
             echo "${key}=${value}" >> "$GITHUB_OUTPUT"
           done < "$CONFIG"
+          for required in lsArtifactPrefix productIntegratorBranch; do
+            if [ -z "${parsed[$required]:-}" ]; then
+              echo "::error::Required key '$required' missing or blank in $CONFIG on branch ${{ matrix.vscodeBranch }}"
+              exit 1
+            fi
+          done
 
       - name: Setup Rush
         uses: gigara/setup-rush@v1.2.0
@@ -248,10 +256,18 @@ jobs:
         id: meta
         run: |
           set -euo pipefail
+          declare -A parsed=()
           while IFS='=' read -r key value; do
             [[ -z "${key// /}" || "$key" =~ ^[[:space:]]*# ]] && continue
+            parsed["$key"]="$value"
             echo "${key}=${value}" >> "$GITHUB_OUTPUT"
           done < build-metadata/build.env
+          for required in version lsVersion vsixFileName; do
+            if [ -z "${parsed[$required]:-}" ]; then
+              echo "::error::Required key '$required' missing or blank in build-metadata/build.env for branch ${{ matrix.vscodeBranch }}"
+              exit 1
+            fi
+          done
 
       - name: Create release on wso2/ballerina-vscode
         env:
@@ -341,10 +357,18 @@ jobs:
         id: meta
         run: |
           set -euo pipefail
+          declare -A parsed=()
           while IFS='=' read -r key value; do
             [[ -z "${key// /}" || "$key" =~ ^[[:space:]]*# ]] && continue
+            parsed["$key"]="$value"
             echo "${key}=${value}" >> "$GITHUB_OUTPUT"
           done < build-metadata/build.env
+          for required in version productIntegratorBranch; do
+            if [ -z "${parsed[$required]:-}" ]; then
+              echo "::error::Required key '$required' missing or blank in build-metadata/build.env for branch ${{ matrix.vscodeBranch }}"
+              exit 1
+            fi
+          done
 
       - name: Checkout product-integrator
         uses: actions/checkout@v4
