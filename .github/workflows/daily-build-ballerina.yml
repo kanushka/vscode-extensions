@@ -400,12 +400,29 @@ jobs:
             exit 1
           fi
 
+      # Per-leg release-success marker. Downstream gates key off this — the
+      # metadata artifact alone isn't enough (Build can succeed while Release
+      # fails, e.g. release creation or asset upload errors).
+      - name: Mark release success
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          mkdir -p release-ok
+          echo "releaseId=required" > release-ok/release.env
+
+      - name: Upload release success marker
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ballerina-daily-release-ok-${{ steps.slug.outputs.slug }}
+          path: release-ok/release.env
+          retention-days: 30
+
   UpdateProductIntegrator:
     name: Update product-integrator (${{ matrix.vscodeBranch }})
     needs: [Build, Release]
     # Per-leg gating: !cancelled() allows this leg to run even when another matrix
     # leg of Build/Release failed. The `gate` step skips this specific leg if its
-    # own Build didn't produce the metadata artifact.
+    # own Release didn't complete successfully (marker artifact absent).
     if: ${{ !cancelled() && github.repository == 'wso2/vscode-extensions' }}
     runs-on: ubuntu-latest
     strategy:
@@ -419,18 +436,24 @@ jobs:
         id: slug
         run: echo "slug=$(echo '${{ matrix.vscodeBranch }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
 
-      - name: Gate on this branch's Build success
+      - name: Gate on this branch's Release success
         id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          artifact="ballerina-daily-metadata-${{ steps.slug.outputs.slug }}"
+          # Key off the release-ok marker rather than the build metadata: Build
+          # can succeed while Release fails (e.g. GH API hiccup during release
+          # create or asset upload). If we gate on metadata alone, we would
+          # open a product-integrator PR referencing a release that doesn't
+          # exist. The marker is only uploaded at the end of a successful
+          # Release run for this specific matrix leg.
+          artifact="ballerina-daily-release-ok-${{ steps.slug.outputs.slug }}"
           found=$(gh api --paginate \
             "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
             --jq ".artifacts[] | select(.name == \"$artifact\") | .id" | head -n1)
           if [ -z "$found" ]; then
-            echo "Build for ${{ matrix.vscodeBranch }} did not produce $artifact; skipping this leg."
+            echo "Release for ${{ matrix.vscodeBranch }} did not produce $artifact; skipping this leg."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
@@ -541,33 +564,34 @@ jobs:
         id: slug
         run: echo "slug=$(echo '${{ matrix.vscodeBranch }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
 
-      - name: Gate on this branch's full-pipeline success
+      - name: Gate on this branch's Release success
         id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Skip if Build didn't produce this leg's metadata artifact, or if any
-          # prior matrix job for this leg failed. We can't read per-leg Release /
-          # UpdateProductIntegrator results from `needs.*`, so rely on the
-          # artifact gate: downstream legs only skip Release/UpdatePI on their
-          # own `gate=true`, so artifact presence implies Build succeeded. A
-          # Release/UpdatePI failure on this leg is caught by NotifyFailure.
-          artifact="ballerina-daily-metadata-${{ steps.slug.outputs.slug }}"
+          # Only post success notification if Release actually succeeded for
+          # this leg. The marker is uploaded at the end of a successful
+          # Release run (artifact name ballerina-daily-release-ok-<slug>).
+          # A Release failure for this leg will be reported via NotifyFailure.
+          artifact="ballerina-daily-release-ok-${{ steps.slug.outputs.slug }}"
           found=$(gh api --paginate \
             "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
             --jq ".artifacts[] | select(.name == \"$artifact\") | .id" | head -n1)
           if [ -z "$found" ]; then
-            echo "Build for ${{ matrix.vscodeBranch }} did not produce $artifact; skipping notify."
+            echo "Release for ${{ matrix.vscodeBranch }} did not produce $artifact; skipping notify."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
+      # Checkout without ref so the composite action at
+      # ./.github/actions/dailyBuildNotification resolves to the workflow's
+      # own commit (github.sha), not the checked-out leg's branch tip. This
+      # keeps both matrix legs using the same action definition — otherwise
+      # release/bi-1.8.x could load a stale copy of the action.
       - uses: actions/checkout@v4
         if: steps.gate.outputs.skip != 'true'
-        with:
-          ref: ${{ matrix.vscodeBranch }}
 
       - name: Download VSIX artifact
         if: steps.gate.outputs.skip != 'true'
