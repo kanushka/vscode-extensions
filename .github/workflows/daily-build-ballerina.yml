@@ -216,12 +216,30 @@ jobs:
         continue-on-error: true
         run: |
           set +e
+          passed=()
+          failed=()
           for pkg in ballerina-visualizer type-diagram sequence-diagram component-diagram bi-diagram; do
             echo "::group::Snapshot tests — $pkg"
-            (cd "workspaces/ballerina/$pkg" && pnpm test) \
-              || echo "::warning::Snapshot tests failed for $pkg (non-blocking for daily build)"
+            if (cd "workspaces/ballerina/$pkg" && pnpm test); then
+              passed+=("$pkg")
+            else
+              failed+=("$pkg")
+              echo "::warning::Snapshot tests failed for $pkg (non-blocking for daily build)"
+            fi
             echo "::endgroup::"
           done
+
+          {
+            echo "### Ballerina diagram snapshot tests (${{ matrix.vscodeBranch }})"
+            echo ""
+            echo "- Passed: ${#passed[@]} / 5"
+            echo "- Failed: ${#failed[@]} / 5"
+            if [ ${#failed[@]} -gt 0 ]; then
+              echo ""
+              echo "Failed packages (non-blocking):"
+              for p in "${failed[@]}"; do echo "- \`$p\`"; done
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
       - name: Get VSIX file name
