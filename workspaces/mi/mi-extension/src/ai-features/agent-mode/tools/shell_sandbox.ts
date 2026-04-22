@@ -664,7 +664,7 @@ function hasDynamicShellExpansion(token: string): boolean {
         || /(^|[^\\])`/.test(normalizedToken);
 }
 
-function isSensitiveTokenName(token: string): boolean {
+export function isSensitiveTokenName(token: string): boolean {
     const normalizedToken = stripWrappingQuotes(token.trim());
     if (!normalizedToken) {
         return false;

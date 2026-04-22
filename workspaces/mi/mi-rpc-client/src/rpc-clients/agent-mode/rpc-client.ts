@@ -41,10 +41,6 @@ import {
     ModelSettings,
     MainModelPreset,
     SubModelPreset,
-    ClearAgentMemoryResponse,
-    OpenAgentMemoryFolderResponse,
-    clearAgentMemory as clearAgentMemoryRpcType,
-    openAgentMemoryFolder as openAgentMemoryFolderRpcType,
 } from "@wso2/mi-core";
 import { HOST_EXTENSION, RequestType } from "vscode-messenger-common";
 import { Messenger } from "vscode-messenger-webview";
@@ -167,7 +163,7 @@ const getAgentRunStatus: RequestType<GetAgentRunStatusRequest, GetAgentRunStatus
 };
 
 // Re-export types from @wso2/mi-core
-export type { MainModelPreset, SubModelPreset, ModelSettings, ClearAgentMemoryResponse, OpenAgentMemoryFolderResponse };
+export type { MainModelPreset, SubModelPreset, ModelSettings };
 
 export class MiAgentPanelRpcClient implements MIAgentPanelAPI {
     private _messenger: Messenger;
@@ -235,17 +231,6 @@ export class MiAgentPanelRpcClient implements MIAgentPanelAPI {
 
     getAgentRunStatus(request: GetAgentRunStatusRequest = {}): Promise<GetAgentRunStatusResponse> {
         return this._messenger.sendRequest(getAgentRunStatus, HOST_EXTENSION, request);
-    }
-
-    // ==================================
-    // Memory Management Functions
-    // ==================================
-    clearAgentMemory(): Promise<ClearAgentMemoryResponse> {
-        return this._messenger.sendRequest(clearAgentMemoryRpcType, HOST_EXTENSION);
-    }
-
-    openAgentMemoryFolder(): Promise<OpenAgentMemoryFolderResponse> {
-        return this._messenger.sendRequest(openAgentMemoryFolderRpcType, HOST_EXTENSION);
     }
 
 }

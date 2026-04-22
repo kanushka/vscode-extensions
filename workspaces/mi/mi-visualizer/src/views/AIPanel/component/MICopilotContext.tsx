@@ -156,10 +156,6 @@ interface MICopilotContextType {
     // Thinking mode
     isThinkingEnabled: boolean;
     setIsThinkingEnabled: React.Dispatch<React.SetStateAction<boolean>>;
-
-    // Memory mode
-    isMemoryEnabled: boolean;
-    setIsMemoryEnabled: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 // Define the context for MI Copilot
@@ -249,14 +245,17 @@ export function MICopilotContextProvider({ children }: MICopilotProviderProps) {
         } catch { return false; }
     });
 
-    // Memory mode state (persisted in localStorage, default off)
-    const MEMORY_KEY = 'mi-agent-memory-enabled';
-    const [isMemoryEnabled, setIsMemoryEnabled] = useState<boolean>(() => {
+    // One-shot cleanup: the memory tool was removed entirely. Clear any
+    // persisted "on" state left over from prior versions so the key doesn't
+    // linger in the user's localStorage indefinitely. Safe to delete this
+    // block after a release or two.
+    useEffect(() => {
         try {
-            const stored = localStorage.getItem(MEMORY_KEY);
-            return stored === 'true';
-        } catch { return false; }
-    });
+            localStorage.removeItem('mi-agent-memory-enabled');
+        } catch {
+            /* ignore storage failures */
+        }
+    }, []);
 
     const updateModelSettings = useCallback((settings: ModelSettings) => {
         setModelSettingsState(settings);
@@ -513,13 +512,6 @@ export function MICopilotContextProvider({ children }: MICopilotProviderProps) {
         } catch { /* ignore */ }
     }, [agentMode, isThinkingEnabled]);
 
-    // Persist memory preference to localStorage
-    useEffect(() => {
-        try {
-            localStorage.setItem(MEMORY_KEY, String(isMemoryEnabled));
-        } catch { /* ignore */ }
-    }, [isMemoryEnabled]);
-
     useEffect(() => {
         setRemaingTokenLessThanOne(remainingTokenPercentage < 1 && remainingTokenPercentage > 0);
     }, [remainingTokenPercentage]);
@@ -587,9 +579,6 @@ export function MICopilotContextProvider({ children }: MICopilotProviderProps) {
         // Thinking mode
         isThinkingEnabled,
         setIsThinkingEnabled,
-        // Memory mode
-        isMemoryEnabled,
-        setIsMemoryEnabled,
     };
 
     return (
