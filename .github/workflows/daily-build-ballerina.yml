@@ -216,30 +216,19 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          passed=()
-          failed=()
+          mkdir -p /tmp/snapshot
           for pkg in ballerina-visualizer type-diagram sequence-diagram component-diagram bi-diagram; do
             echo "::group::Snapshot tests — $pkg"
-            if (cd "workspaces/ballerina/$pkg" && pnpm test); then
-              passed+=("$pkg")
+            (cd "workspaces/ballerina/$pkg" && pnpm test) 2>&1 | tee "/tmp/snapshot/${pkg}.log"
+            rc=${PIPESTATUS[0]}
+            if [ "$rc" -eq 0 ]; then
+              echo pass > "/tmp/snapshot/${pkg}.status"
             else
-              failed+=("$pkg")
+              echo fail > "/tmp/snapshot/${pkg}.status"
               echo "::warning::Snapshot tests failed for $pkg (non-blocking for daily build)"
             fi
             echo "::endgroup::"
           done
-
-          {
-            echo "### Ballerina diagram snapshot tests (${{ matrix.vscodeBranch }})"
-            echo ""
-            echo "- Passed: ${#passed[@]} / 5"
-            echo "- Failed: ${#failed[@]} / 5"
-            if [ ${#failed[@]} -gt 0 ]; then
-              echo ""
-              echo "Failed packages (non-blocking):"
-              for p in "${failed[@]}"; do echo "- \`$p\`"; done
-            fi
-          } >> "$GITHUB_STEP_SUMMARY"
           exit 0
 
       - name: Get VSIX file name
@@ -260,6 +249,51 @@ jobs:
           file="${files[0]}"
           echo "fileName=$file" >> "$GITHUB_OUTPUT"
           echo "Built VSIX: $file"
+
+      - name: Write job summary
+        run: |
+          set -euo pipefail
+          branch='${{ matrix.vscodeBranch }}'
+          version='${{ steps.version.outputs.version }}'
+          vsix='${{ steps.vsix.outputs.fileName }}'
+          lsArtifact='${{ steps.ls.outputs.lsArtifactName }}'
+          lsRunId='${{ steps.ls.outputs.lsRunId }}'
+          lsRunConc='${{ steps.ls.outputs.lsRunConclusion }}'
+          lsRunUrl="https://github.com/ballerina-platform/ballerina-language-server/actions/runs/${lsRunId}"
+
+          {
+            echo "#### Daily build — ${branch}"
+            echo ""
+            echo "| Field | Value |"
+            echo "|---|---|"
+            echo "| Version | \`${version}\` |"
+            echo "| VSIX | \`${vsix}\` |"
+            echo "| LS JAR | \`${lsArtifact}\` |"
+            echo "| LS source run | [${lsRunId}](${lsRunUrl}) (conclusion: ${lsRunConc}) |"
+            echo ""
+            echo "#### Snapshot tests"
+            echo ""
+            echo "| Package | Test Suites | Tests | Status |"
+            echo "|---|---|---|---|"
+            for pkg in ballerina-visualizer type-diagram sequence-diagram component-diagram bi-diagram; do
+              log="/tmp/snapshot/${pkg}.log"
+              status=$(cat "/tmp/snapshot/${pkg}.status" 2>/dev/null || echo "fail")
+              suites="—"
+              tests="—"
+              if [ -f "$log" ]; then
+                s=$(grep -E '^Test Suites:' "$log" | tail -1 | sed 's/^Test Suites:[[:space:]]*//')
+                t=$(grep -E '^Tests:' "$log" | tail -1 | sed 's/^Tests:[[:space:]]*//')
+                [ -n "$s" ] && suites="$s"
+                [ -n "$t" ] && tests="$t"
+              fi
+              if [ "$status" = "pass" ]; then
+                status_txt="passed"
+              else
+                status_txt="failed"
+              fi
+              echo "| ${pkg} | ${suites} | ${tests} | ${status_txt} |"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload VSIX artifact
         uses: actions/upload-artifact@v4
