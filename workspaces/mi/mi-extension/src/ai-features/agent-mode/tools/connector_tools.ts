@@ -230,16 +230,28 @@ export function classifyIdentifier(identifier: string): IdentifierKind {
  */
 function buildInitModeReminder(name: string, lsResult: LSConnectorResult): string {
     const { connectionLocalEntryNeeded, noInitializationNeeded } = deriveInitFlags(lsResult);
-    const id = normalizeIdentifier(name);
+    // lsResult.name is the authoritative connector XML prefix (e.g. "redis",
+    // "salesforce") as declared by the language server. Fall back to
+    // normalizing the caller's artifact id with common Maven/group prefixes
+    // stripped when LS didn't populate a name.
+    const xmlPrefix = resolveConnectorXmlPrefix(name, lsResult);
     let body: string;
     if (noInitializationNeeded) {
         body = `For this connector, no init is required. Call operations directly, no .init or localEntry required.`;
     } else if (connectionLocalEntryNeeded) {
-        body = `For this connector, localEntry init is required. Create a local entry with <${id}.init>, use configKey in operations (the key of the local entry).`;
+        body = `For this connector, localEntry init is required. Create a local entry with <${xmlPrefix}.init>, use configKey in operations (the key of the local entry).`;
     } else {
-        body = `For this connector, inline init is required. Call <${id}.init> before using any connector operation. No localEntry required.`;
+        body = `For this connector, inline init is required. Call <${xmlPrefix}.init> before using any connector operation. No localEntry required.`;
     }
     return `<system-reminder>${body} Call get_connector_info with mode='details' and specific operation_names for richer operation details before writing XML. Use add_or_remove_connector to add the connector to the project.</system-reminder>\n`;
+}
+
+function resolveConnectorXmlPrefix(name: string, lsResult: LSConnectorResult): string {
+    const lsName = typeof lsResult.name === 'string' ? lsResult.name.trim() : '';
+    if (lsName.length > 0) {
+        return lsName;
+    }
+    return normalizeIdentifier(name).replace(/^mi-(?:connector|module|inbound)-/, '');
 }
 
 /**
@@ -357,11 +369,17 @@ async function buildLSOperationDetails(
                 logWarn(`[ConnectorTool] No trusted base dir for '${name}.${action.name}' — skipping output schema read.`);
             } else {
                 let parsed = await readOutputSchemaFile(action.outputSchemaPath, schemaBaseDir);
+                // Re-check after each await — the schema read can block on
+                // disk I/O, so we need a checkpoint to detect an abort that
+                // fired during the await before we use `parsed` or emit
+                // anything referencing this operation.
+                ensureOperationNotAborted(mainAbortSignal, `reading schema for '${name}.${action.name}'`);
                 if (parsed === null && lsResult.outputSchemaPath) {
                     parsed = await readOutputSchema(
                         lsResult.outputSchemaPath,
                         action.name
                     );
+                    ensureOperationNotAborted(mainAbortSignal, `reading schema for '${name}.${action.name}'`);
                 }
                 if (parsed !== null) {
                     outputSchema = flattenOutputSchema(parsed) ?? NO_OUTPUT_SCHEMA_PLACEHOLDER;

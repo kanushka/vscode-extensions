@@ -151,7 +151,7 @@ function toToolResult(output: any): ToolResult {
 export function createDeepWikiExecute(mainAbortSignal?: AbortSignal): DeepWikiAskQuestionExecuteFn {
     return async (args): Promise<ToolResult> => {
         const repoName = normalizeRepoName(args.repoName);
-        if ((Array.isArray(repoName) && repoName.length === 0) || (!Array.isArray(repoName) && repoName.length === 0)) {
+        if (repoName.length === 0) {
             return {
                 success: false,
                 message: 'DeepWiki query failed: repoName is required.',

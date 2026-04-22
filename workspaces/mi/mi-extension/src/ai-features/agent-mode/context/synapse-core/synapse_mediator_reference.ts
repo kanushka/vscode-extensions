@@ -521,10 +521,19 @@ Inside templates, parameters are accessed via \`\${params.functionParams.paramNa
 
 script: `## Script Mediator — Deep Reference (GraalJS)
 
-The Script mediator runs inline code against the message context. The **GraalVM JS** engine (\`language="js"\`) is the default and ships with the runtime; the Nashorn engine is not bundled. Groovy (\`language="groovy"\`) and Ruby (\`language="rb"\`) are also supported, but **only when their optional runtime jars are present** on the MI classpath — drop \`groovy-all-2.4.4.jar\` or \`jruby-complete\` into \`<MI_HOME>/lib\` to enable them. Stick with \`language="js"\` unless there's a specific reason to pull in another runtime.
+The Script mediator runs inline code against the message context. The **GraalVM JS** engine (\`language="js"\`) is the default and ships with the runtime; the Nashorn engine is not bundled. Groovy (\`language="groovy"\`) and Ruby (\`language="rb"\`) are also supported, but **only when their optional runtime jars are present** on the MI classpath — drop \`groovy-all-2.4.4.jar\` or \`jruby-complete-*.jar\` (both are OSGi bundles) into \`<MI_HOME>/dropins\` to enable them. Stick with \`language="js"\` unless there's a specific reason to pull in another runtime.
 
 ### MI 4.5+ class-access sandbox
-GraalJS scripts run under a class-access policy. On MI 4.5+ access to \`java.lang\` (and other Java packages) is **blocked by default** — \`java.lang.Thread.sleep(ms)\`, \`java.lang.System.currentTimeMillis()\`, and similar calls will throw \`SynapseException\` unless the package is explicitly allowed via \`deployment.toml\` (\`[[script_mediator.allow_java_classes]]\` or equivalent \`ScriptAccessControl\` configuration). Prefer mediator-level patterns (e.g. the Iterate mediator for delays between retries) and avoid direct Java calls from scripts unless the deployment has been configured to permit them.
+GraalJS scripts run under a class-access policy. On MI 4.5+ access to \`java.lang\`, \`java.io\`, \`java.nio\`, and \`java.net\` is **blocked by default** — \`java.lang.Thread.sleep(ms)\`, \`java.lang.System.currentTimeMillis()\`, and similar calls will throw \`SynapseException\` unless the policy is adjusted via \`deployment.toml\`:
+
+\`\`\`toml
+[synapse_properties]
+'limit_java_class_access_in_scripts.enable' = true
+'limit_java_class_access_in_scripts.list_type' = "BLOCK_LIST"   # or "ALLOW_LIST"
+'limit_java_class_access_in_scripts.class_prefixes' = "java.lang,java.io,java.nio,java.net"
+\`\`\`
+
+A parallel \`limit_java_native_object_access_in_scripts.*\` set of keys restricts native object/method access. Prefer mediator-level patterns (e.g. the Iterate mediator for delays between retries) and avoid direct Java calls from scripts unless the deployment has been configured to permit them.
 
 ### XML Schema
 \`\`\`xml

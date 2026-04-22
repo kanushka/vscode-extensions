@@ -379,6 +379,13 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
     // Any inbound event stamped with a different chatId belongs to a prior
     // interrupted run and must be ignored, otherwise late content_block /
     // tool_result events would bleed into the new conversation.
+    //
+    // On session switch we set this to DROP_ALL_RUN_CHAT_ID (a negative
+    // sentinel that cannot collide with generateId()'s 8-digit positive
+    // range) so stamped events for the previous session are rejected until
+    // the new run establishes its chatId via handleSend or
+    // restoreAgentRunStatus.
+    const DROP_ALL_RUN_CHAT_ID = -1;
     const activeRunChatIdRef = useRef<number | undefined>(undefined);
     const lastUserPromptRef = useRef<string>("");
     const [isFocused, setIsFocused] = useState(false);
@@ -502,6 +509,24 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
     // Uses refs for values that change between renders (assistantResponseRef, currentChatIdRef)
     // to avoid stale closure issues since this callback is registered once via onAgentEvent.
     const handleAgentEvent = useCallback((event: AgentEvent) => {
+        // Drop events stamped with a prior run's chatId. Without this, a
+        // content_block / tool_result that arrives after the user interrupted
+        // and started a new turn would render into the fresh conversation.
+        // Done before the abortedRef guard because the ref is reset when the
+        // new run begins and would no longer protect us.
+        //
+        // Must also precede the ENABLE_STREAM_SAFEGUARDS block below — a
+        // late stop/abort from the prior run would otherwise flip
+        // terminalEventReceivedRef and stop the polling loop for the ACTIVE
+        // run, or bump lastReceivedSeqRef past events we still need.
+        if (
+            event.chatId !== undefined &&
+            activeRunChatIdRef.current !== undefined &&
+            event.chatId !== activeRunChatIdRef.current
+        ) {
+            return;
+        }
+
         // Track sequence number and timestamp for polling fallback. Do this
         // even when events are being dropped by the abort guard below — the
         // polling loop still needs to know a terminal event arrived so it can
@@ -514,19 +539,6 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
             if (event.type === 'stop' || event.type === 'error' || event.type === 'abort') {
                 terminalEventReceivedRef.current = true;
             }
-        }
-
-        // Drop events stamped with a prior run's chatId. Without this, a
-        // content_block / tool_result that arrives after the user interrupted
-        // and started a new turn would render into the fresh conversation.
-        // Done before the abortedRef guard because the ref is reset when the
-        // new run begins and would no longer protect us.
-        if (
-            event.chatId !== undefined &&
-            activeRunChatIdRef.current !== undefined &&
-            event.chatId !== activeRunChatIdRef.current
-        ) {
-            return;
         }
 
         // Ignore all events if generation was aborted by the user. The UI has
@@ -1005,6 +1017,13 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
         // The 'abort' event handler below remains a safety net for backend-
         // initiated aborts (watchdog timeout, etc.) and re-entry is idempotent.
         abortedRef.current = true;
+        // Release the send guard as part of the same optimistic flip.
+        // Without this, the outstanding sendAgentMessage RPC keeps
+        // sendInProgressRef.current=true until its finally runs, so a user
+        // pressing Send again after the interrupt sees the button appear
+        // enabled (backendRequestTriggered was cleared) but handleSend bails
+        // out on the sendInProgressRef guard.
+        sendInProgressRef.current = false;
         finalizeInterruptionUi('user');
 
         // Fire-and-forget the abort RPC so the backend can tear down in
@@ -1282,20 +1301,35 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
                 // Abort event already updates UI with interruption state.
                 return;
             }
-            setMessages((prevMessages) => {
-                const newMessages = [...prevMessages];
-                const lastIdx = newMessages.length - 1;
-                const cleanedContent = removeWorkingOnItToolCallTag(newMessages[lastIdx].content);
-                newMessages[lastIdx].content = cleanedContent + errorMessage;
-                newMessages[newMessages.length - 1].type = MessageType.Error;
-                return newMessages;
-            });
-            console.error("Error sending agent message:", error);
+            // Only surface the error if this completion still belongs to the
+            // active run. If the user interrupted and started a fresh turn,
+            // the stale RPC's rejection would otherwise corrupt the new
+            // run's last message with an error marker.
+            if (activeRunChatIdRef.current !== chatId) {
+                console.error("Error sending agent message (stale run, suppressed UI):", error);
+            } else {
+                setMessages((prevMessages) => {
+                    const newMessages = [...prevMessages];
+                    const lastIdx = newMessages.length - 1;
+                    const cleanedContent = removeWorkingOnItToolCallTag(newMessages[lastIdx].content);
+                    newMessages[lastIdx].content = cleanedContent + errorMessage;
+                    newMessages[newMessages.length - 1].type = MessageType.Error;
+                    return newMessages;
+                });
+                console.error("Error sending agent message:", error);
+            }
         } finally {
+            // Run-scoped cleanup: only reset shared state when this finally
+            // belongs to the CURRENT active run. If handleInterrupt fired and
+            // a new handleSend has already taken over, activeRunChatIdRef
+            // points at the new chatId — clobbering backendRequestTriggered
+            // or sendInProgressRef here would drop the new run's gating.
             clearWorkingOnItTimer();
-            setCurrentUserprompt("");
-            setBackendRequestTriggered(false);
-            sendInProgressRef.current = false;
+            if (activeRunChatIdRef.current === chatId) {
+                setCurrentUserprompt("");
+                setBackendRequestTriggered(false);
+                sendInProgressRef.current = false;
+            }
         }
     }
 
@@ -1342,9 +1376,13 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
 
     // Clear the interrupt guard when the active session changes so events
     // streamed for the newly-switched session aren't dropped by a prior
-    // interrupt that belonged to a different session.
+    // interrupt that belonged to a different session. Also park the active
+    // run chatId at DROP_ALL_RUN_CHAT_ID so any late events addressed to the
+    // prior session's run are rejected until handleSend or
+    // restoreAgentRunStatus establishes the new run's chatId.
     useEffect(() => {
         abortedRef.current = false;
+        activeRunChatIdRef.current = DROP_ALL_RUN_CHAT_ID;
     }, [currentSessionId]);
 
     // Restore in-progress/completed run state when the panel reconnects.
@@ -1375,6 +1413,19 @@ const AIChatFooter: React.FC<AIChatFooterProps> = ({ isUsageExceeded = false }) 
                 if (runStatus.isRunning) {
                     setBackendRequestTriggered(true);
                 }
+
+                // Adopt the restored run's chatId BEFORE replaying events so
+                // the chatId-mismatch guard in handleAgentEvent accepts them.
+                // After a session switch activeRunChatIdRef is parked at
+                // DROP_ALL_RUN_CHAT_ID, which would otherwise reject the
+                // buffered events. If the buffer has no event with a chatId
+                // (e.g. isRunning with no events yet), fall back to undefined
+                // so incoming push events are accepted until one supplies a
+                // chatId.
+                const restoredChatId = bufferedEvents.find(
+                    (e): e is AgentEvent & { chatId: number } => typeof e.chatId === 'number'
+                )?.chatId;
+                activeRunChatIdRef.current = restoredChatId;
 
                 setMessages((prev) => {
                     if (prev.length > 0 && prev[prev.length - 1].role === Role.MICopilot) {
