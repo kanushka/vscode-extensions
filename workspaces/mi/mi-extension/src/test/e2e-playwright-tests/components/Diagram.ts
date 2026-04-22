@@ -218,7 +218,7 @@ export class Diagram {
         const sidePanel = new SidePanel(this.diagramWebView);
         await sidePanel.init();
         await sidePanel.search(operation);
-        await sidePanel.addConnector(connector, operation, operationId);
+        await sidePanel.addConnector(operation);
     }
 
     public async fillConnectorForm(props: FormFillProps) {
@@ -392,12 +392,8 @@ export class SidePanel {
         await this.sidePanel.waitFor({ state: 'detached' })
     }
 
-    public async addConnector(connectorName: string, operationName: string, operationId?: string) {
-        const connector = this.sidePanel.locator(`#card-select-${connectorName}`).nth(0);
-        await connector.waitFor();
-        const connectorComponent = connector.locator(`..`);
-
-        const operation = connectorComponent.locator(`#card-select-${operationId ? operationId : operationName}`);
+    public async addConnector(operationName: string) {
+        const operation = this.sidePanel.getByText(operationName);
         await operation.waitFor();
         await operation.click();
     }
@@ -446,6 +442,7 @@ export class SidePanel {
         await connector.waitFor();
 
         const deleteBtn = connector.locator(`.delete-icon`);
+        await deleteBtn.waitFor();
         await deleteBtn.click();
 
         await this.sidePanel.locator(`p:text(" module will be removed from the project. Make sure all its dependencies are removed.")`);
