@@ -135,7 +135,6 @@ jobs:
             s/-[0-9]{8}-[0-9]{6}$//')
           echo "Parsed LS version: $lsVersion"
 
-          mkdir -p /tmp/ls-unpack
           echo "Downloading artifact zip..."
           curl -fsSL \
             -H "Accept: application/vnd.github+json" \
@@ -144,31 +143,26 @@ jobs:
             -o /tmp/ls-artifact.zip \
             "https://api.github.com/repos/${LS_REPO}/actions/artifacts/${artifactId}/zip"
 
-          unzip -o /tmp/ls-artifact.zip -d /tmp/ls-unpack
-          echo "--- Unpacked contents ---"
-          find /tmp/ls-unpack -type f | head -50
-          echo "--- End contents ---"
-          # Prefer the versioned LS jar; fall back to any .jar if the naming
-          # inside the zip differs from the artifact name.
-          mapfile -t jars < <(find /tmp/ls-unpack -type f -name 'ballerina-language-server-*.jar')
-          if [ ${#jars[@]} -eq 0 ]; then
-            mapfile -t jars < <(find /tmp/ls-unpack -type f -name '*.jar')
-          fi
-          if [ ${#jars[@]} -ne 1 ]; then
-            echo "::error::Expected exactly one .jar in artifact, found ${#jars[@]}:"
-            printf ' - %s\n' "${jars[@]}"
-            exit 1
-          fi
-          jar="${jars[0]}"
-          echo "Found LS JAR: $jar"
+          # The downloaded "zip" from /artifacts/{id}/zip may either wrap the JAR
+          # file or be the JAR itself (JARs are zips). Detect which by peeking at
+          # the top-level entries: a wrapper zip lists one `*.jar` entry; a raw
+          # JAR lists class files / META-INF / etc.
+          mkdir -p /tmp/ls-unpack
+          mapfile -t topEntries < <(unzip -Z1 /tmp/ls-artifact.zip | awk -F/ '{print $1}' | sort -u)
+          innerJar=$(unzip -Z1 /tmp/ls-artifact.zip | grep -E '^[^/]+\.jar$' | head -1 || true)
 
-          # download-ls.js looks for files matching ballerina-language-server-*.jar
-          # (scripts/download-ls.js:44-45). Rename on copy so the dropped JAR is
-          # recognized even when the artifact zip contains a differently-named file.
           target="workspaces/ballerina/ballerina-extension/ls/ballerina-language-server-${lsVersion}.jar"
           mkdir -p workspaces/ballerina/ballerina-extension/ls
           rm -f workspaces/ballerina/ballerina-extension/ls/*.jar
-          cp "$jar" "$target"
+
+          if [ -n "$innerJar" ]; then
+            echo "Artifact is a wrapper zip; extracting $innerJar"
+            unzip -o /tmp/ls-artifact.zip -d /tmp/ls-unpack >/dev/null
+            cp "/tmp/ls-unpack/$innerJar" "$target"
+          else
+            echo "Artifact is the JAR itself (no inner .jar entry); copying directly"
+            cp /tmp/ls-artifact.zip "$target"
+          fi
           ls -la workspaces/ballerina/ballerina-extension/ls/
 
           echo "lsVersion=$lsVersion" >> "$GITHUB_OUTPUT"
