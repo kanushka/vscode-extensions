@@ -18,7 +18,8 @@
 
 import { Locator } from "@playwright/test";
 import { MACHINE_VIEW } from "@wso2/mi-core";
-import { ExtendedPage, getVsCodeButton, switchToIFrame } from "@wso2/playwright-vscode-tester";
+import { ExtendedPage, Form, getVsCodeButton, switchToIFrame } from "@wso2/playwright-vscode-tester";
+import { page } from "../Utils";
 
 export class Welcome {
     private container!: Locator;
@@ -27,15 +28,65 @@ export class Welcome {
     }
 
     public async init() {
-        const webview = await switchToIFrame(MACHINE_VIEW.Welcome, this.page.page, 60000)
+        const webview = await switchToIFrame("Welcome", this.page.page, 60000);
         if (!webview) {
-            throw new Error("Failed to switch to Design View iframe");
+            throw new Error("Failed to switch to Welcome page iframe");
         }
         this.container = webview.locator('div#root');
     }
+
+    public async switchToMIExtension() {
+        const miExtensionSetting = this.container.getByRole('button', { name: ' Configure' });
+        await miExtensionSetting.waitFor({ timeout: 30000 });
+        await miExtensionSetting.click();
+        const dropdown = this.container.locator('slot').filter({ hasText: /^WSO2 Integrator: Default$/ });
+        await dropdown.waitFor({ timeout: 30000 });
+        await dropdown.click();
+        await this.container.getByRole('option', { name: 'WSO2 Integrator: MI' }).click();
+        await this.container.getByRole('button', { name: '' }).click();
+    }
     public async createNewProject() {
-        const btn = await getVsCodeButton(this.container, 'Create New Project', 'primary', 150000);
+        const createButton = this.container.getByRole('button', { name: 'Create' });
+        await createButton.waitFor({ timeout: 30000 });
+        await createButton.click();
+    }
+
+    public async createNewIntegration(projectName?: string, runtimeVersion?: string, projectPath?: string, addAdvancedConfig: boolean = false) {
+        await this.container.getByRole('combobox', { name: 'WSO2 Integrator: MI runtime' }).locator('div').nth(1).click();
+        await this.container.getByRole('textbox', { name: 'Project Name*' }).waitFor({ timeout: 30000 });
+        await this.container.getByRole('textbox', { name: 'Project Name*' }).fill(projectName || 'testProject');    
+        await this.container.getByRole('combobox', { name: 'Runtime Version*' }).click();
+        await this.container.getByRole('option', { name: runtimeVersion || '4.4.0' }).click();
+        console.log('Filled the project creation form with project name and runtime version');
+        const createNewProjectForm = new Form(this.page.page, 'Welcome');
+        console.log('Switching to form view');
+        await createNewProjectForm.switchToFormView();
+        console.log('Filling the project creation form with location');
+        const btn = this.container.getByRole('button', { name: 'Select Path' });
         await btn.click();
+        const fileInput = await this.page.page.waitForSelector('.quick-input-header');
+        const textInput = await fileInput?.waitForSelector('input[type="text"]');
+        await textInput?.fill(projectPath || '');
+        const okBtn = await fileInput?.waitForSelector('a.monaco-button:has-text("OK")');
+        await okBtn?.click();
+        console.log('Filled the project creation form with project name, runtime version and location');
+        if (addAdvancedConfig) {
+            console.log('Adding advanced configuration to the project');
+            const webView = await switchToIFrame('Project Creation Form', this.page.page);
+            if (!webView) {
+                throw new Error("Failed to switch to Project Creation Form iframe");
+            }
+            await webView.locator('vscode-button[title="Expand"]').click();
+            await webView.getByRole('textbox', { name: 'Artifact Id*' }).fill('test');
+        }
+        console.log('Submitting the project creation form');
+        await this.container.getByRole('button', { name: 'Create Project' }).click();
+        // await this.page.page.getByRole('button', { name: "No, Don't Ask Again" })
+        //     .click({ timeout: 30000 }).catch(() => {});
+        console.log('Project created');
+        this.setupEnvironment();
+        console.log('Environment setup done');
+        await this.container.getByRole('button', { name: 'Create Project' }).click();
     }
 
     public async createNewProjectFromSample(projectName: string, path: string) {
