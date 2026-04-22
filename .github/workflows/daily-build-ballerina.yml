@@ -281,10 +281,10 @@ jobs:
               suites="—"
               tests="—"
               if [ -f "$log" ]; then
-                s=$(grep -E '^Test Suites:' "$log" | tail -1 | sed 's/^Test Suites:[[:space:]]*//')
-                t=$(grep -E '^Tests:' "$log" | tail -1 | sed 's/^Tests:[[:space:]]*//')
-                [ -n "$s" ] && suites="$s"
-                [ -n "$t" ] && tests="$t"
+                s=$(grep -E '^Test Suites:' "$log" | tail -1 | sed 's/^Test Suites:[[:space:]]*//' || true)
+                t=$(grep -E '^Tests:' "$log" | tail -1 | sed 's/^Tests:[[:space:]]*//' || true)
+                [ -n "${s:-}" ] && suites="$s"
+                [ -n "${t:-}" ] && tests="$t"
               fi
               if [ "$status" = "pass" ]; then
                 status_txt="passed"
