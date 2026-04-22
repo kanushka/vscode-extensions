@@ -52,18 +52,12 @@ jobs:
             fi
           done
 
-      - name: Setup Rush
-        uses: gigara/setup-rush@v1.2.0
-        with:
-          pnpm: 10.10.0
-          node: 22.x
-          cache-rush: true
-          cache-pnpm: true
-
+      # LS artifact fetch runs BEFORE Setup Rush so LS lookup failures abort
+      # the job in ~10s instead of wasting ~1-2 min on pnpm/node install.
       - name: Fetch latest LS daily-build artifact
         id: ls
         env:
-          GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
+          GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           LS_REPO: ballerina-platform/ballerina-language-server
           LS_WORKFLOW: daily-build.yml
           ARTIFACT_PREFIX: ${{ steps.config.outputs.lsArtifactPrefix }}
@@ -131,10 +125,14 @@ jobs:
           artifactName=$(echo "$selectedArtifact" | jq -r '.name')
           echo "Using artifact: $artifactName (id=$artifactId) from run $selectedRunId"
 
-          # Parse LS version from artifact name: daily-build-<prefix>-<lsVer>-<YYYYMMDD>-<HHMMSS>
-          # Strip the configured prefix and the trailing -YYYYMMDD-HHMMSS.
-          stripped=${artifactName#${ARTIFACT_PREFIX}}
-          lsVersion=$(echo "$stripped" | sed -E 's/-[0-9]{8}-[0-9]{6}$//')
+          # Parse LS version independently of ARTIFACT_PREFIX (the prefix is used
+          # only for selection). Artifact name shape:
+          #   ballerina-language-server-<lsVer>-<YYYYMMDD>-<HHMMSS>.jar
+          # e.g. ballerina-language-server-1.8.0.m3-20260421-150453.jar -> 1.8.0.m3
+          lsVersion=$(echo "$artifactName" | sed -E '
+            s/^ballerina-language-server-//
+            s/\.jar$//
+            s/-[0-9]{8}-[0-9]{6}$//')
           echo "Parsed LS version: $lsVersion"
 
           mkdir -p /tmp/ls-unpack
@@ -165,6 +163,14 @@ jobs:
           echo "lsArtifactName=$artifactName" >> "$GITHUB_OUTPUT"
           echo "lsRunId=$selectedRunId" >> "$GITHUB_OUTPUT"
           echo "lsRunConclusion=$selectedRunConclusion" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Rush
+        uses: gigara/setup-rush@v1.2.0
+        with:
+          pnpm: 10.10.0
+          node: 22.x
+          cache-rush: true
+          cache-pnpm: true
 
       - name: Rush install
         run: node common/scripts/install-run-rush.js install
