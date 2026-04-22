@@ -616,6 +616,23 @@ jobs:
             exit 1
           fi
 
+      # Per-leg product-integrator success marker. NotifySuccess gates on this
+      # so a leg whose UpdateProductIntegrator failed does not get a
+      # "daily build succeeded" chat notification alongside NotifyFailure.
+      - name: Mark product-integrator success
+        if: steps.gate.outputs.skip != 'true'
+        run: |
+          mkdir -p pi-ok
+          echo "updated=required" > pi-ok/pi.env
+
+      - name: Upload product-integrator success marker
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: ballerina-daily-product-integrator-ok-${{ steps.slug.outputs.slug }}
+          path: pi-ok/pi.env
+          retention-days: 30
+
   NotifySuccess:
     name: Notify Success (${{ matrix.vscodeBranch }})
     needs: [Build, Release, UpdateProductIntegrator]
@@ -636,22 +653,31 @@ jobs:
         id: slug
         run: echo "slug=$(echo '${{ matrix.vscodeBranch }}' | tr '/' '-')" >> "$GITHUB_OUTPUT"
 
-      - name: Gate on this branch's Release success
+      - name: Gate on this branch's Release and UpdateProductIntegrator success
         id: gate
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Only post success notification if Release actually succeeded for
-          # this leg. The marker is uploaded at the end of a successful
-          # Release run (artifact name ballerina-daily-release-ok-<slug>).
-          # A Release failure for this leg will be reported via NotifyFailure.
-          artifact="ballerina-daily-release-ok-${{ steps.slug.outputs.slug }}"
-          found=$(gh api --paginate \
+          # Only post success notification if BOTH Release and
+          # UpdateProductIntegrator succeeded for this leg. `needs.*.result`
+          # is aggregated across the matrix and can't be used for per-leg
+          # gating, so we key off the two markers. A failure in either will
+          # be surfaced by NotifyFailure.
+          slug="${{ steps.slug.outputs.slug }}"
+          releaseMarker="ballerina-daily-release-ok-${slug}"
+          piMarker="ballerina-daily-product-integrator-ok-${slug}"
+          artifacts=$(gh api --paginate \
             "/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/artifacts" \
-            --jq ".artifacts[] | select(.name == \"$artifact\") | .id" | head -n1)
-          if [ -z "$found" ]; then
-            echo "Release for ${{ matrix.vscodeBranch }} did not produce $artifact; skipping notify."
+            --jq '.artifacts[].name')
+          missing=""
+          for name in "$releaseMarker" "$piMarker"; do
+            if ! echo "$artifacts" | grep -Fxq "$name"; then
+              missing="$missing $name"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "Missing markers for ${{ matrix.vscodeBranch }}:$missing; skipping notify."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
