@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 6 * * *'
   workflow_dispatch:
+    inputs:
+      sendNotification:
+        description: 'Send Google Chat notifications (success/failure)'
+        type: boolean
+        default: true
 
 jobs:
   Build:
@@ -581,7 +586,10 @@ jobs:
           git config user.name "WSO2 Builder"
           git config user.email "builder@wso2.com"
           git checkout -b "$BRANCH_NAME"
-          git add "$PROPERTIES_FILE"
+          # -f needed: product-integrator's .gitignore contains `build/` which
+          # matches `ci/build/*`. The properties file is tracked but git add
+          # refuses gitignored paths without --force.
+          git add -f "$PROPERTIES_FILE"
           git commit -m "Update ballerina.extension.version to ${NEW_VERSION}"
           git push origin "$BRANCH_NAME"
 
@@ -613,8 +621,9 @@ jobs:
     needs: [Build, Release, UpdateProductIntegrator]
     # Per-leg gating: !cancelled() allows this leg to run even when another matrix
     # leg failed. The `gate` step skips this specific leg if its own Build didn't
-    # produce the metadata artifact.
-    if: ${{ !cancelled() && github.repository == 'wso2/vscode-extensions' }}
+    # produce the metadata artifact. Manual dispatch can opt out via
+    # sendNotification=false; scheduled runs always notify.
+    if: ${{ !cancelled() && github.repository == 'wso2/vscode-extensions' && (github.event_name != 'workflow_dispatch' || inputs.sendNotification) }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -673,7 +682,7 @@ jobs:
   NotifyFailure:
     name: Notify Failure
     needs: [Build, Release, UpdateProductIntegrator]
-    if: ${{ always() && contains(needs.*.result, 'failure') && github.repository == 'wso2/vscode-extensions' }}
+    if: ${{ always() && contains(needs.*.result, 'failure') && github.repository == 'wso2/vscode-extensions' && (github.event_name != 'workflow_dispatch' || inputs.sendNotification) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
