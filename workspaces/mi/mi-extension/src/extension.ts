@@ -125,10 +125,20 @@ export async function deactivate(): Promise<void> {
 	}
 }
 
-export function checkForDevantExt() {
+export function checkForWso2IntegratorExt() {
 	const wso2PlatformExtension = extensions.getExtension(WI_EXTENSION_ID);
 	if (!wso2PlatformExtension) {
-		vscode.window.showErrorMessage('The WSO2 Integrator extension is not installed. Please install it to proceed.');
+		vscode.window.showErrorMessage('The WSO2 Integrator extension is not installed. Please install it to proceed.', "Install WSO2 Integrator").then(selection => {
+			if (selection === "Install WSO2 Integrator") {
+				vscode.commands.executeCommand(COMMANDS.INSTALL_EXTENSION_COMMAND, WI_EXTENSION_ID).then(() => {
+					vscode.window.showInformationMessage('WSO2 Integrator extension installed. Please reload VSCode to complete the extension activation.', "Reload Window").then(reloadSelection => {
+						if (reloadSelection === "Reload Window") {
+							vscode.commands.executeCommand(COMMANDS.RELOAD_WINDOW);
+						}
+					});
+				});
+			}
+		});
 		return false;
 	}
 	return true;
