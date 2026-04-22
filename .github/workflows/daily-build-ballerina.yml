@@ -151,7 +151,9 @@ jobs:
           mapfile -t topEntries < <(unzip -Z1 /tmp/ls-artifact.zip | awk -F/ '{print $1}' | sort -u)
           innerJar=$(unzip -Z1 /tmp/ls-artifact.zip | grep -E '^[^/]+\.jar$' | head -1 || true)
 
-          target="workspaces/ballerina/ballerina-extension/ls/ballerina-language-server-${lsVersion}.jar"
+          # Preserve the artifact's full timestamped filename so the JAR shipped
+          # in the VSIX traces back to the exact LS build.
+          target="workspaces/ballerina/ballerina-extension/ls/${artifactName}"
           mkdir -p workspaces/ballerina/ballerina-extension/ls
           rm -f workspaces/ballerina/ballerina-extension/ls/*.jar
 
