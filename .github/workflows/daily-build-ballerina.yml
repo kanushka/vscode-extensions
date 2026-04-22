@@ -181,18 +181,6 @@ jobs:
       - name: Rush install
         run: node common/scripts/install-run-rush.js install
 
-      - name: Run Ballerina diagram snapshot tests
-        continue-on-error: true
-        run: |
-          set +e
-          for pkg in ballerina-visualizer type-diagram sequence-diagram component-diagram bi-diagram; do
-            echo "::group::Snapshot tests — $pkg"
-            (cd "workspaces/ballerina/$pkg" && pnpm test) \
-              || echo "::warning::Snapshot tests failed for $pkg (non-blocking for daily build)"
-            echo "::endgroup::"
-          done
-          exit 0
-
       - name: Compute version
         id: version
         run: |
@@ -221,6 +209,18 @@ jobs:
         run: node common/scripts/install-run-rush.js build -t ballerina --verbose
         env:
           isPreRelease: true
+
+      - name: Run Ballerina diagram snapshot tests
+        continue-on-error: true
+        run: |
+          set +e
+          for pkg in ballerina-visualizer type-diagram sequence-diagram component-diagram bi-diagram; do
+            echo "::group::Snapshot tests — $pkg"
+            (cd "workspaces/ballerina/$pkg" && pnpm test) \
+              || echo "::warning::Snapshot tests failed for $pkg (non-blocking for daily build)"
+            echo "::endgroup::"
+          done
+          exit 0
 
       - name: Get VSIX file name
         id: vsix
