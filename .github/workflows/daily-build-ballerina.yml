@@ -145,18 +145,30 @@ jobs:
             "https://api.github.com/repos/${LS_REPO}/actions/artifacts/${artifactId}/zip"
 
           unzip -o /tmp/ls-artifact.zip -d /tmp/ls-unpack
-          mapfile -t jars < <(find /tmp/ls-unpack -maxdepth 2 -type f -name 'ballerina-language-server-*.jar')
+          echo "--- Unpacked contents ---"
+          find /tmp/ls-unpack -type f | head -50
+          echo "--- End contents ---"
+          # Prefer the versioned LS jar; fall back to any .jar if the naming
+          # inside the zip differs from the artifact name.
+          mapfile -t jars < <(find /tmp/ls-unpack -type f -name 'ballerina-language-server-*.jar')
+          if [ ${#jars[@]} -eq 0 ]; then
+            mapfile -t jars < <(find /tmp/ls-unpack -type f -name '*.jar')
+          fi
           if [ ${#jars[@]} -ne 1 ]; then
-            echo "::error::Expected exactly one ballerina-language-server-*.jar in artifact, found ${#jars[@]}:"
+            echo "::error::Expected exactly one .jar in artifact, found ${#jars[@]}:"
             printf ' - %s\n' "${jars[@]}"
             exit 1
           fi
           jar="${jars[0]}"
-          echo "Found LS JAR: $(basename "$jar")"
+          echo "Found LS JAR: $jar"
 
+          # download-ls.js looks for files matching ballerina-language-server-*.jar
+          # (scripts/download-ls.js:44-45). Rename on copy so the dropped JAR is
+          # recognized even when the artifact zip contains a differently-named file.
+          target="workspaces/ballerina/ballerina-extension/ls/ballerina-language-server-${lsVersion}.jar"
           mkdir -p workspaces/ballerina/ballerina-extension/ls
           rm -f workspaces/ballerina/ballerina-extension/ls/*.jar
-          cp "$jar" workspaces/ballerina/ballerina-extension/ls/
+          cp "$jar" "$target"
           ls -la workspaces/ballerina/ballerina-extension/ls/
 
           echo "lsVersion=$lsVersion" >> "$GITHUB_OUTPUT"
