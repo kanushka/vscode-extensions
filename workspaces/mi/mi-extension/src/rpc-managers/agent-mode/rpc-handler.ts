@@ -38,8 +38,6 @@ import {
     deleteSession,
     searchMentionablePaths,
     getAgentRunStatus,
-    clearAgentMemory,
-    openAgentMemoryFolder,
     ListSessionsRequest,
     SwitchSessionRequest,
     CreateNewSessionRequest,
@@ -99,11 +97,5 @@ export function registerMIAgentPanelRpcHandlers(messenger: MessengerAPI, project
     messenger.onRequest(searchMentionablePaths, (request: SearchMentionablePathsRequest) =>
         rpcManager.searchMentionablePaths(request)
     );
-
-    // ==================================
-    // Memory Management Functions
-    // ==================================
-    messenger.onRequest(clearAgentMemory, () => rpcManager.clearAgentMemory());
-    messenger.onRequest(openAgentMemoryFolder, () => rpcManager.openAgentMemoryFolder());
 
 }

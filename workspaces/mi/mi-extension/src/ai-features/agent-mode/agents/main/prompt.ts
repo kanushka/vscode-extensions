@@ -98,11 +98,14 @@ MI Runtime logs:
 </system-reminder>
 
 <system-reminder>
-Available WSO2 connectors from the WSO2 connector store:
-{{available_connectors}}
+Available WSO2 connector artifact ids for this version of the MI runtime (from the connector store — pass these to get_connector_info / add_or_remove_connector):
+{{available_connector_artifact_ids}}
 
-Available WSO2 inbound endpoints from the WSO2 connector store:
-{{available_inbound_endpoints}}
+Available downloadable inbound artifact ids for this version of the MI runtime (from the connector store — add via add_or_remove_connector):
+{{available_inbound_artifact_ids}}
+
+Available bundled inbound ids (shipped with this version of the MI runtime — use the id directly with get_connector_info, do NOT add to pom.xml):
+{{available_bundled_inbound_ids}}
 </system-reminder>
 {{/if}}
 
@@ -147,7 +150,6 @@ You are in {{mode_upper}} mode.
 {{/if}}
 
 <system-reminder>
-YOU ARE IN DEVELOPMENT PHASE. NOT IN PRODUCTION YET. HELP THE DEVELOPER IF DEVELOPER ASKS META QUESTIONS ABOUT YOUR INTERNALS/TOOL CALLS etc
 **DO NOT CREATE ANY README FILES or ANY DOCUMENTATION FILES after end of the task unless explicitly requested by the user.**
 </system-reminder>
 
@@ -359,9 +361,12 @@ export async function getUserPrompt(params: UserPromptParams): Promise<UserPromp
     // Get currently opened file content
     const currentlyOpenedFile = await getCurrentlyOpenedFile(params.projectPath);
 
-    // Get available connectors and inbound endpoints
+    // Get available connectors, downloadable inbounds, and bundled inbounds.
+    // All three lists are now artifact ids / bundled ids — the tools take those directly.
     const connectorCatalog = await getAvailableConnectorCatalog(params.projectPath);
-    const { connectors: availableConnectors, inboundEndpoints: availableInboundEndpoints } = connectorCatalog;
+    const availableConnectorArtifactIds = connectorCatalog.connectorArtifactIds;
+    const availableInboundArtifactIds = connectorCatalog.inboundArtifactIds;
+    const availableBundledInboundIds = connectorCatalog.bundledInboundIds;
 
     const mode = params.mode || 'edit';
     const modePolicyReminder = await getModeReminder({
@@ -407,8 +412,9 @@ export async function getUserPrompt(params: UserPromptParams): Promise<UserPromp
         userPreconfigured: params.payloads, // Pre-configured payloads (optional)
         payloads: params.payloads, // Backward-compatible template key
         include_session_context: params.includeSessionContext ?? true,
-        available_connectors: availableConnectors.join(', '), // Available connectors list
-        available_inbound_endpoints: availableInboundEndpoints.join(', '), // Available inbound endpoints list
+        available_connector_artifact_ids: availableConnectorArtifactIds.join(', '),
+        available_inbound_artifact_ids: availableInboundArtifactIds.join(', '),
+        available_bundled_inbound_ids: availableBundledInboundIds.join(', '),
         env_working_directory: params.projectPath,
         env_is_git_repo: isGitRepo ? 'true' : 'false',
         env_git_branch: gitBranch,
