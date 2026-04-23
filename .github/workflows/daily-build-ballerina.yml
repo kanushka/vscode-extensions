@@ -2,7 +2,11 @@ name: Ballerina Daily Build
 
 on:
   schedule:
-    - cron: '0 6 * * *'
+    # 05:17 UTC = 10:47 Colombo (nominal). Off-hour minute avoids GitHub's
+    # high-load batch at :00; actual firing typically drifts 0–30 min later,
+    # landing close to the desired 11:30 Colombo. Exact timing is not
+    # achievable with scheduled triggers — platform limitation.
+    - cron: '17 5 * * *'
   workflow_dispatch:
     inputs:
       sendNotification:
@@ -412,7 +416,7 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          TAG="ballerina-v${NEW_VERSION}"
+          TAG="v${NEW_VERSION}"
           RELEASE_NAME="Ballerina Extension Daily Build v${NEW_VERSION}"
           shopt -s nullglob
           files=(ballerina-*.vsix)
@@ -590,7 +594,7 @@ jobs:
           git commit -m "Update ballerina.extension.version to ${NEW_VERSION}"
           git push origin "$BRANCH_NAME"
 
-          pr_body=$(printf 'Automated PR to update Ballerina extension version after daily build.\n\n- Source vscode branch: %s\n- Release: https://github.com/wso2/ballerina-vscode/releases/tag/ballerina-v%s' "$SOURCE_BRANCH" "$NEW_VERSION")
+          pr_body=$(printf 'Automated PR to update Ballerina extension version after daily build.\n\n- Source vscode branch: %s\n- Release: https://github.com/wso2/ballerina-vscode/releases/tag/v%s' "$SOURCE_BRANCH" "$NEW_VERSION")
           payload=$(jq -n \
             --arg title "Update ballerina.extension.version to ${NEW_VERSION}" \
             --arg head "$BRANCH_NAME" \
