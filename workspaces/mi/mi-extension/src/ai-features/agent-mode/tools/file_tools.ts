@@ -19,8 +19,8 @@
 import { tool } from 'ai';
 import { z } from 'zod';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
-import * as glob from 'glob';
 import * as vscode from 'vscode';
 
 import {
@@ -43,7 +43,16 @@ import { logDebug, logError } from '../../copilot/logger';
 import { validateXmlFile, formatValidationMessage } from './validation-utils';
 import { AgentUndoCheckpointManager } from '../undo/checkpoint-manager';
 import { getCopilotProjectsRootDir } from '../storage-paths';
-// file_edit_patch.ts is deprecated — edit tool now uses simple string replacement
+import {
+    runRipgrepGuarded,
+    parseRgJsonMatches,
+    parseRgFiles,
+    parseRgCountOutput,
+    validateRgTypeName,
+    RG_EXCLUDED_DIRS,
+    RG_EXCLUDED_SENSITIVE_GLOBS,
+} from './ripgrep_runner';
+import { isSensitiveTokenName } from './shell_sandbox';
 
 // ============================================================================
 // Validation Functions
@@ -52,41 +61,12 @@ import { getCopilotProjectsRootDir } from '../storage-paths';
 const READ_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp'] as const;
 const READ_PDF_EXTENSION = '.pdf';
 const PDF_MAX_PAGES_PER_REQUEST = 5;
+// Pattern/glob length bounds are enforced by the grep tool's Zod schema; the
+// constants are kept here so the schema's `describe` text remains in sync.
 const MAX_GREP_PATTERN_LENGTH = 512;
 const MAX_GREP_GLOB_LENGTH = 256;
-const MAX_GREP_SEARCH_DEPTH = 12;
 const MAX_GREP_MATCH_LINE_LENGTH = 500;
 const POST_WRITE_VALIDATION_DELAY_MS = 500;
-
-const GREP_TYPE_EXTENSION_MAP: Record<string, string[]> = {
-    js: ['.js', '.mjs', '.cjs'],
-    ts: ['.ts', '.tsx', '.mts', '.cts'],
-    jsx: ['.jsx', '.tsx'],
-    json: ['.json'],
-    xml: ['.xml', '.xsd', '.xsl', '.xslt'],
-    csv: ['.csv'],
-    yaml: ['.yaml', '.yml'],
-    yml: ['.yaml', '.yml'],
-    java: ['.java'],
-    go: ['.go'],
-    py: ['.py'],
-    sh: ['.sh', '.bash'],
-    md: ['.md', '.mdx'],
-    sql: ['.sql'],
-    css: ['.css', '.scss', '.sass', '.less'],
-    html: ['.html', '.htm'],
-    proto: ['.proto'],
-    properties: ['.properties'],
-    toml: ['.toml'],
-    ini: ['.ini'],
-    gradle: ['.gradle'],
-    swift: ['.swift'],
-    kotlin: ['.kt', '.kts'],
-    rust: ['.rs'],
-    ruby: ['.rb'],
-    php: ['.php'],
-    dockerfile: ['.dockerfile'],
-};
 
 const IMAGE_MEDIA_TYPE_BY_EXTENSION: Record<string, string> = {
     '.png': 'image/png',
@@ -199,138 +179,32 @@ function isPathWithin(basePath: string, targetPath: string): boolean {
 }
 
 function resolveFullPath(projectPath: string, filePath: string): string {
-    return path.isAbsolute(filePath) ? path.resolve(filePath) : path.resolve(projectPath, filePath);
+    const expanded = /^~(?:[\\/]|$)/.test(filePath)
+        ? path.join(os.homedir(), filePath.slice(1))
+        : filePath;
+    return path.isAbsolute(expanded) ? path.resolve(expanded) : path.resolve(projectPath, expanded);
 }
 
 function isCopilotGlobalPath(fullPath: string): boolean {
     return isPathWithin(getCopilotProjectsRootDir(), fullPath);
 }
 
-function escapeRegexCharacters(value: string): string {
-    return value.replace(/[|\\{}()[\]^$+*?.]/g, '\\$&');
-}
-
 function delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function compileGrepPattern(pattern: string, caseInsensitive: boolean): { regex?: RegExp; error?: string } {
-    if (!pattern || pattern.length > MAX_GREP_PATTERN_LENGTH) {
-        return {
-            error: `Pattern length must be between 1 and ${MAX_GREP_PATTERN_LENGTH} characters.`,
-        };
-    }
-
-    try {
-        return {
-            regex: new RegExp(pattern, caseInsensitive ? 'gi' : 'g'),
-        };
-    } catch (error) {
-        return {
-            error: `Invalid regex pattern: ${error instanceof Error ? error.message : String(error)}`,
-        };
-    }
-}
-
-function compileGlobPattern(globPattern?: string, caseInsensitive?: boolean): { regex?: RegExp; error?: string } {
-    if (!globPattern) {
-        return {};
-    }
-
-    if (globPattern.length > MAX_GREP_GLOB_LENGTH) {
-        return {
-            error: `Glob length must be at most ${MAX_GREP_GLOB_LENGTH} characters.`,
-        };
-    }
-
-    if (/[\r\n\0]/.test(globPattern)) {
-        return {
-            error: 'Glob contains invalid control characters.',
-        };
-    }
-
-    // Strip leading **/ — the tool already recurses directories, so globstar is redundant.
-    // Without this, patterns like "**/DLQ*.xml" fail because ** is not handled in regex conversion.
-    // Only remove a leading "**/" — embedded "**/" (e.g., "src/**/foo.xml") are meaningful and preserved.
-    let normalizedGlob = globPattern.replace(/^\*\*\//, '');
-
-    try {
-        let hasInvalidBraceGroup = false;
-        const escapedGlob = escapeRegexCharacters(normalizedGlob).replace(/\\\{([^{}]+)\\\}/g, (_match, group) => {
-            const options = group
-                .split(',')
-                .map((option: string) => option.trim())
-                .filter((option: string) => option.length > 0);
-
-            if (options.length === 0 || options.length > 20) {
-                hasInvalidBraceGroup = true;
-                return '';
-            }
-
-            return `(${options.map((option: string) => escapeRegexCharacters(option)).join('|')})`;
-        });
-
-        if (hasInvalidBraceGroup) {
-            return {
-                error: 'Glob contains an invalid brace group.',
-            };
-        }
-
-        const regexBody = escapedGlob
-            .replace(/\\\*/g, '.*')
-            .replace(/\\\?/g, '.');
-        return {
-            regex: new RegExp(`^${regexBody}$`, caseInsensitive ? 'i' : undefined),
-        };
-    } catch (error) {
-        return {
-            error: `Invalid glob pattern: ${error instanceof Error ? error.message : String(error)}`,
-        };
-    }
-}
-
-function parseGrepFileType(fileType?: string): { value?: string; error?: string } {
-    if (!fileType) {
-        return {};
-    }
-
-    const normalizedType = fileType.trim().toLowerCase();
-    if (!normalizedType) {
-        return {};
-    }
-
-    if (normalizedType.length > 32 || !/^[a-z0-9_+-]+$/.test(normalizedType)) {
-        return {
-            error: 'Invalid file type filter. Use an alphanumeric rg type (e.g., "ts", "js", "java").',
-        };
-    }
-
-    return { value: normalizedType };
-}
-
-function matchesRequestedFileType(fileName: string, requestedType?: string): boolean {
-    if (!requestedType) {
-        return true;
-    }
-
-    const lowerName = fileName.toLowerCase();
-    const extension = path.extname(lowerName);
-    if (!extension) {
-        return lowerName === requestedType;
-    }
-
-    const mappedExtensions = GREP_TYPE_EXTENSION_MAP[requestedType];
-    if (mappedExtensions) {
-        return mappedExtensions.includes(extension);
-    }
-
-    return extension === `.${requestedType}`;
-}
-
 /**
  * Validates path security rules that apply to all file tools.
+ *
+ * By default, paths must resolve inside the project or the copilot global dir.
+ * Pass `allowOutsideProject: true` for read-only callers (read/grep/glob) where
+ * reading arbitrary filesystem locations is acceptable; writes/edits must stay strict.
  */
-function validateFilePathSecurity(projectPath: string, filePath: string): ValidationResult {
+function validateFilePathSecurity(
+    projectPath: string,
+    filePath: string,
+    options: { allowOutsideProject?: boolean } = {}
+): ValidationResult {
     if (!filePath || typeof filePath !== 'string') {
         return {
             valid: false,
@@ -346,8 +220,17 @@ function validateFilePathSecurity(projectPath: string, filePath: string): Valida
         };
     }
 
-    // Security: prevent home shorthand and traversal in relative paths
-    if (/^~(?:[\\/]|$)/.test(normalizedPath) || (!path.isAbsolute(normalizedPath) && normalizedPath.includes('..'))) {
+    const allowOutside = options.allowOutsideProject === true;
+
+    // Security: prevent home shorthand (strict mode only) and traversal in relative paths.
+    // Read-only mode allows `~/...` expansion via resolveFullPath.
+    if (!allowOutside && /^~(?:[\\/]|$)/.test(normalizedPath)) {
+        return {
+            valid: false,
+            error: 'File path contains invalid traversal segments (.., leading ~).'
+        };
+    }
+    if (!path.isAbsolute(normalizedPath) && !/^~(?:[\\/]|$)/.test(normalizedPath) && normalizedPath.includes('..')) {
         return {
             valid: false,
             error: 'File path contains invalid traversal segments (.., leading ~).'
@@ -355,31 +238,86 @@ function validateFilePathSecurity(projectPath: string, filePath: string): Valida
     }
 
     const fullPath = resolveFullPath(projectPath, normalizedPath);
-    if (!isPathWithin(projectPath, fullPath) && !isCopilotGlobalPath(fullPath)) {
+
+    // Sensitive-path denylist applies even when `allowOutsideProject` is set —
+    // parity with the shell sandbox so read/grep/glob can't exfiltrate SSH
+    // keys, AWS credentials, `.env` files, shell rc files, etc. via a
+    // prompt-injected instruction.
+    if (isSensitiveTokenName(fullPath)) {
         return {
             valid: false,
-            error: 'File path must be within the project or ~/.wso2-mi/copilot/projects.'
+            error: 'Access to sensitive credential paths (SSH keys, cloud credentials, .env files, shell rc files) is not allowed.'
         };
     }
 
-    // Symlink protection: resolve real path and re-check containment
+    // Realpath-based denylist runs for BOTH read and write modes — otherwise a
+    // symlink in an `allowOutside` read would exfiltrate credentials while the
+    // lexical check above passes. The containment check (isPathWithin /
+    // isCopilotGlobalPath) is still restricted to write/strict mode because
+    // reads may legitimately traverse outside the project tree.
+    //
+    // For writes (fullPath doesn't exist yet), walk up to the nearest existing
+    // parent and realpath *that*. Otherwise writes through a symlinked parent
+    // (e.g. `project/link/new.xml`) bypass containment entirely.
+    let realTargetForChecks: string | undefined;
     try {
         if (fs.existsSync(fullPath)) {
-            const realTarget = fs.realpathSync(fullPath);
-            const realProject = fs.realpathSync(projectPath);
-            if (!isPathWithin(realProject, realTarget) && !isCopilotGlobalPath(realTarget)) {
-                return {
-                    valid: false,
-                    error: 'File path resolves via symlink to a location outside the project.'
-                };
+            realTargetForChecks = fs.realpathSync(fullPath);
+        } else {
+            let probe = path.dirname(fullPath);
+            const seenRoot = path.parse(probe).root;
+            while (!fs.existsSync(probe)) {
+                const parent = path.dirname(probe);
+                if (parent === probe || probe === seenRoot) {
+                    break;
+                }
+                probe = parent;
+            }
+            if (fs.existsSync(probe)) {
+                const realParent = fs.realpathSync(probe);
+                const rel = path.relative(probe, fullPath);
+                realTargetForChecks = path.resolve(realParent, rel);
             }
         }
+        if (realTargetForChecks && isSensitiveTokenName(realTargetForChecks)) {
+            return {
+                valid: false,
+                error: 'Access to sensitive credential paths (SSH keys, cloud credentials, .env files, shell rc files) is not allowed.'
+            };
+        }
     } catch {
-        // realpath failure (e.g. broken symlink) — reject
         return {
             valid: false,
             error: 'File path could not be resolved (broken symlink or permission error).'
         };
+    }
+
+    if (!allowOutside) {
+        if (!isPathWithin(projectPath, fullPath) && !isCopilotGlobalPath(fullPath)) {
+            return {
+                valid: false,
+                error: 'File path must be within the project or ~/.wso2-mi/copilot/projects.'
+            };
+        }
+
+        // Symlink protection: re-check containment against the realpath we
+        // already resolved above (avoids a second fs.realpathSync call).
+        if (realTargetForChecks !== undefined) {
+            try {
+                const realProject = fs.realpathSync(projectPath);
+                if (!isPathWithin(realProject, realTargetForChecks) && !isCopilotGlobalPath(realTargetForChecks)) {
+                    return {
+                        valid: false,
+                        error: 'File path resolves via symlink to a location outside the project.'
+                    };
+                }
+            } catch {
+                return {
+                    valid: false,
+                    error: 'File path could not be resolved (broken symlink or permission error).'
+                };
+            }
+        }
     }
 
     return { valid: true };
@@ -407,9 +345,12 @@ function validateTextFilePath(projectPath: string, filePath: string): Validation
 
 /**
  * Validates file paths for read operations (text + multimodal).
+ *
+ * Reads are allowed outside the project — convenient for inspecting logs,
+ * connector JARs, or other files the agent needs to reason about.
  */
 function validateReadableFilePath(projectPath: string, filePath: string): ValidationResult {
-    const securityValidation = validateFilePathSecurity(projectPath, filePath);
+    const securityValidation = validateFilePathSecurity(projectPath, filePath, { allowOutsideProject: true });
     if (!securityValidation.valid) {
         return securityValidation;
     }
@@ -1145,258 +1086,231 @@ export function createGrepExecute(projectPath: string): GrepExecuteFn {
         path?: string;
         glob?: string;
         type?: string;
-        output_mode?: 'content' | 'files_with_matches';
+        output_mode?: 'content' | 'files_with_matches' | 'count';
         '-i'?: boolean;
+        '-A'?: number;
+        '-B'?: number;
+        '-C'?: number;
+        multiline?: boolean;
         head_limit?: number;
     }): Promise<ToolResult> => {
         const {
             pattern,
             path: searchPath = '.',
-            glob,
+            glob: globFilter,
             type: fileType,
-            output_mode = 'content',
+            output_mode = 'files_with_matches',
             '-i': caseInsensitive = false,
-            head_limit = 100
+            '-A': afterLines,
+            '-B': beforeLines,
+            '-C': contextLines,
+            multiline = false,
+            head_limit = 100,
         } = args;
 
-        logDebug(`[GrepTool] Searching for pattern '${pattern}' in ${searchPath}`);
+        logDebug(`[GrepTool] Searching for pattern '${pattern}' in ${searchPath} (mode=${output_mode})`);
 
-        const compiledPattern = compileGrepPattern(pattern, caseInsensitive);
-        if (!compiledPattern.regex) {
+        // Glob control-character guard (Zod enforces length, but not control chars).
+        if (globFilter && /[\r\n\0]/.test(globFilter)) {
             return {
                 success: false,
-                message: compiledPattern.error || 'Invalid regex pattern.',
-                error: 'Error: Invalid regex pattern',
-            };
-        }
-
-        const compiledGlob = compileGlobPattern(glob, caseInsensitive);
-        if (glob && !compiledGlob.regex) {
-            return {
-                success: false,
-                message: compiledGlob.error || 'Invalid glob pattern.',
+                message: 'Glob contains invalid control characters.',
                 error: 'Error: Invalid glob pattern',
             };
         }
 
-        const parsedFileType = parseGrepFileType(fileType);
-        if (fileType && !parsedFileType.value) {
+        // Format-validate the user-supplied --type for argv safety. The actual
+        // type name is passed straight to rg; rg rejects unknown types itself.
+        let typeArgs: string[] = [];
+        if (fileType) {
+            const validated = validateRgTypeName(fileType);
+            if ('error' in validated) {
+                return {
+                    success: false,
+                    message: validated.error,
+                    error: 'Error: Invalid file type filter',
+                };
+            }
+            if (validated.value) {
+                typeArgs = ['--type', validated.value];
+            }
+        }
+
+        const pathValidation = validateFilePathSecurity(projectPath, searchPath, { allowOutsideProject: true });
+        if (!pathValidation.valid) {
             return {
                 success: false,
-                message: parsedFileType.error || 'Invalid file type filter.',
-                error: 'Error: Invalid file type filter',
+                message: pathValidation.error!,
+                error: `Error: ${ErrorMessages.INVALID_FILE_PATH}`,
             };
         }
 
-        try {
-            const results: Array<{file: string; line: number; content: string}> = [];
-            const filesWithMatches: Set<string> = new Set();
-            const regex = compiledPattern.regex;
-            const globRegex = compiledGlob.regex;
+        const fullSearchPath = resolveFullPath(projectPath, searchPath);
 
-            const pathValidation = validateFilePathSecurity(projectPath, searchPath);
-            if (!pathValidation.valid) {
-                return {
-                    success: false,
-                    message: pathValidation.error!,
-                    error: `Error: ${ErrorMessages.INVALID_FILE_PATH}`
-                };
-            }
-
-            const fullSearchPath = resolveFullPath(projectPath, searchPath);
-
-            if (!fs.existsSync(fullSearchPath)) {
-                return {
-                    success: false,
-                    message: `Path '${searchPath}' does not exist.`,
-                    error: 'Error: Path not found'
-                };
-            }
-
-            // Recursive function to search through directories
-            const searchInDirectory = (dirPath: string, currentDepth: number) => {
-                if (currentDepth > MAX_GREP_SEARCH_DEPTH) {
-                    return;
-                }
-
-                if (output_mode === 'content' && results.length >= head_limit) return;
-                if (output_mode === 'files_with_matches' && filesWithMatches.size >= head_limit) return;
-
-                const entries = fs.readdirSync(dirPath, { withFileTypes: true });
-
-                for (const entry of entries) {
-                    if (output_mode === 'content' && results.length >= head_limit) break;
-                    if (output_mode === 'files_with_matches' && filesWithMatches.size >= head_limit) break;
-
-                    const fullPath = path.join(dirPath, entry.name);
-
-                    if (entry.isSymbolicLink()) {
-                        continue;
-                    }
-
-                    if (entry.isDirectory()) {
-                        // Skip common directories
-                        if (entry.name === 'node_modules' || entry.name === '.git' ||
-                            entry.name === 'target' || entry.name === 'build' ||
-                            entry.name === '.devtools') {
-                            continue;
-                        }
-                        searchInDirectory(fullPath, currentDepth + 1);
-                    } else if (entry.isFile()) {
-                        // Check glob pattern if specified — test against relative path from search root
-                        // so patterns containing "/" (e.g. "src/**/foo.xml") can match
-                        if (globRegex) {
-                            const relativeFromRoot = path.relative(fullSearchPath, fullPath);
-                            if (!globRegex.test(relativeFromRoot) && !globRegex.test(entry.name)) {
-                                continue;
-                            }
-                        }
-
-                        if (!isTextAllowedFilePath(entry.name)) {
-                            continue;
-                        }
-
-                        if (!matchesRequestedFileType(entry.name, parsedFileType.value)) {
-                            continue;
-                        }
-
-                        // Search in file
-                        try {
-                            const content = fs.readFileSync(fullPath, 'utf-8');
-                            const lines = content.split('\n');
-
-                            for (let i = 0; i < lines.length; i++) {
-                                if (regex.test(lines[i])) {
-                                    const relativePath = path.relative(projectPath, fullPath);
-
-                                    if (output_mode === 'files_with_matches') {
-                                        filesWithMatches.add(relativePath);
-                                        break; // Only need one match per file
-                                    } else {
-                                        if (results.length >= head_limit) break;
-                                        const trimmedLine = lines[i].trim();
-                                        results.push({
-                                            file: relativePath,
-                                            line: i + 1,
-                                            content: trimmedLine.length > MAX_GREP_MATCH_LINE_LENGTH
-                                                ? trimmedLine.substring(0, MAX_GREP_MATCH_LINE_LENGTH) + '… [truncated]'
-                                                : trimmedLine
-                                        });
-                                    }
-                                }
-                                // Reset regex lastIndex for global regex
-                                regex.lastIndex = 0;
-                            }
-                        } catch (error) {
-                            // Skip files that can't be read
-                            logError(`[GrepTool] Error reading file ${fullPath}:`, error);
-                        }
-                    }
-                }
+        if (!fs.existsSync(fullSearchPath)) {
+            return {
+                success: false,
+                message: `Path '${searchPath}' does not exist.`,
+                error: 'Error: Path not found',
             };
+        }
 
-            // Start search
-            const stats = fs.statSync(fullSearchPath);
-            if (stats.isDirectory()) {
-                searchInDirectory(fullSearchPath, 0);
-            } else if (stats.isFile()) {
-                if (!isTextAllowedFilePath(path.basename(fullSearchPath))) {
-                    return {
-                        success: true,
-                        message: `No matches found for pattern '${pattern}' in ${searchPath}.`
-                    };
-                }
-
-                if (!matchesRequestedFileType(path.basename(fullSearchPath), parsedFileType.value)) {
-                    return {
-                        success: true,
-                        message: `No matches found for pattern '${pattern}' in ${searchPath}.`
-                    };
-                }
-
-                // Search in single file
-                const content = fs.readFileSync(fullSearchPath, 'utf-8');
-                const lines = content.split('\n');
-
-                for (let i = 0; i < lines.length; i++) {
-                    if (regex.test(lines[i])) {
-                        const relativePath = path.relative(projectPath, fullSearchPath);
-
-                        if (output_mode === 'files_with_matches') {
-                            filesWithMatches.add(relativePath);
-                            break; // Only need one match per file
-                        } else {
-                            if (results.length >= head_limit) break;
-                            const trimmedLine = lines[i].trim();
-                            results.push({
-                                file: relativePath,
-                                line: i + 1,
-                                content: trimmedLine.length > MAX_GREP_MATCH_LINE_LENGTH
-                                    ? trimmedLine.substring(0, MAX_GREP_MATCH_LINE_LENGTH) + '… [truncated]'
-                                    : trimmedLine
-                            });
-                        }
-                    }
-                    regex.lastIndex = 0;
-                }
-            }
-
-            // Build response message based on output mode
-            if (output_mode === 'files_with_matches') {
-                if (filesWithMatches.size === 0) {
-                    return {
-                        success: true,
-                        message: `No matches found for pattern '${pattern}' in ${searchPath}.`
-                    };
-                }
-
-                let message = `Found ${filesWithMatches.size} file(s) with matches for pattern '${pattern}':\n\n`;
-                for (const file of filesWithMatches) {
-                    message += `${file}\n`;
-                }
-
-                if (filesWithMatches.size >= head_limit) {
-                    message += `\n(Limited to ${head_limit} files. Use head_limit parameter to see more.)`;
-                }
-
-                logDebug(`[GrepTool] Found ${filesWithMatches.size} files with matches`);
-                return {
-                    success: true,
-                    message: message.trim()
-                };
+        // Build the rg argument list. Match glob's ignore semantics (--no-ignore
+        // + --no-ignore-vcs) so grep results don't silently skip files the glob
+        // tool would return — e.g. target/, build/, and anything else covered
+        // by a project .gitignore. RG_EXCLUDED_DIRS / RG_EXCLUDED_SENSITIVE_GLOBS
+        // below are the single source of truth for what grep hides.
+        const rgArgs: string[] = ['--no-follow', '--no-ignore', '--no-ignore-vcs'];
+        if (output_mode === 'files_with_matches') {
+            rgArgs.push('-l');
+        } else if (output_mode === 'count') {
+            // --with-filename forces `file:count` output even when rg is run
+            // against a single file; parseRgCountOutput needs the `file:` prefix
+            // on every line, otherwise single-file searches silently drop the
+            // result (lastIndexOf(':') is negative on a bare number).
+            rgArgs.push('-c', '--with-filename');
+        } else {
+            // content mode — use --json for structured parsing of matches + context events
+            rgArgs.push('--json');
+        }
+        if (caseInsensitive) {
+            rgArgs.push('-i');
+        }
+        if (multiline) {
+            rgArgs.push('-U', '--multiline-dotall');
+        }
+        // Context flags only meaningful in content mode. -C overrides -A/-B if set.
+        if (output_mode === 'content') {
+            if (typeof contextLines === 'number' && contextLines > 0) {
+                rgArgs.push('-C', String(contextLines));
             } else {
-                // output_mode === 'content'
-                if (results.length === 0) {
-                    return {
-                        success: true,
-                        message: `No matches found for pattern '${pattern}' in ${searchPath}.`
-                    };
+                if (typeof afterLines === 'number' && afterLines > 0) {
+                    rgArgs.push('-A', String(afterLines));
                 }
-
-                let message = `Found ${results.length} match(es) for pattern '${pattern}':\n\n`;
-                for (const result of results) {
-                    message += `${result.file}:${result.line}: ${result.content}\n`;
+                if (typeof beforeLines === 'number' && beforeLines > 0) {
+                    rgArgs.push('-B', String(beforeLines));
                 }
+            }
+        }
+        rgArgs.push(...typeArgs);
+        if (globFilter) {
+            rgArgs.push('--glob', globFilter);
+        }
+        for (const dir of RG_EXCLUDED_DIRS) {
+            rgArgs.push('--glob', `!${dir}`);
+        }
+        for (const pat of RG_EXCLUDED_SENSITIVE_GLOBS) {
+            rgArgs.push('--glob', `!${pat}`);
+        }
+        // Positional separator prevents a pattern starting with `-` from being parsed as a flag.
+        rgArgs.push('--', pattern, fullSearchPath);
 
-                if (results.length >= head_limit) {
-                    message += `\n(Limited to ${head_limit} results. Use head_limit parameter to see more.)`;
-                }
+        const guarded = await runRipgrepGuarded(rgArgs, projectPath, 'GrepTool');
+        if (guarded.failure) {
+            return guarded.failure;
+        }
+        const rgResult = guarded.result;
 
-                console.log(`[GrepTool] Found ${results.length} matches`);
+        // head_limit: 0 means unlimited; positive means cap.
+        const limit = head_limit > 0 ? head_limit : Number.POSITIVE_INFINITY;
+        const truncationNote = rgResult.truncated
+            ? '\n\n(Note: rg output was truncated at 16 MB. Results are partial — narrow your search.)'
+            : '';
+
+        if (output_mode === 'files_with_matches') {
+            const rawFiles = parseRgFiles(rgResult.stdout);
+            const wasCapped = rawFiles.length > limit;
+            const filesWithMatches = rawFiles
+                .slice(0, limit)
+                .map(absPath => path.relative(projectPath, absPath));
+
+            if (filesWithMatches.length === 0) {
                 return {
                     success: true,
-                    message: message.trim()
+                    message: `No matches found for pattern '${pattern}' in ${searchPath}.${truncationNote}`,
                 };
             }
 
-        } catch (error) {
-            console.error(`[GrepTool] Error during search:`, error);
+            let message = `Found ${filesWithMatches.length} file(s) with matches for pattern '${pattern}':\n\n`;
+            for (const file of filesWithMatches) {
+                message += `${file}\n`;
+            }
+            if (wasCapped) {
+                message += `\n(Limited to ${head_limit} files. Use head_limit parameter to see more.)`;
+            }
+            message += truncationNote;
+
+            logDebug(`[GrepTool] Found ${filesWithMatches.length} files with matches`);
             return {
-                success: false,
-                message: `Error searching for pattern: ${error instanceof Error ? error.message : String(error)}`,
-                error: `Error: Search failed`
+                success: true,
+                message: message.trim(),
             };
         }
+
+        if (output_mode === 'count') {
+            const rawCounts = parseRgCountOutput(rgResult.stdout);
+            const wasCapped = rawCounts.length > limit;
+            const counts = rawCounts
+                .slice(0, limit)
+                .map(c => ({ file: path.relative(projectPath, c.file), count: c.count }));
+
+            if (counts.length === 0) {
+                return {
+                    success: true,
+                    message: `No matches found for pattern '${pattern}' in ${searchPath}.${truncationNote}`,
+                };
+            }
+
+            let message = `Found matches in ${counts.length} file(s) for pattern '${pattern}':\n\n`;
+            for (const c of counts) {
+                message += `${c.file}:${c.count}\n`;
+            }
+            if (wasCapped) {
+                message += `\n(Limited to ${head_limit} files. Use head_limit parameter to see more.)`;
+            }
+            message += truncationNote;
+
+            logDebug(`[GrepTool] Counted matches in ${counts.length} files`);
+            return {
+                success: true,
+                message: message.trim(),
+            };
+        }
+
+        // content mode — entries can be matches or context lines
+        const allEntries = parseRgJsonMatches(rgResult.stdout);
+        const wasCapped = allEntries.length > limit;
+        const entries = allEntries.slice(0, limit);
+
+        if (entries.length === 0) {
+            return {
+                success: true,
+                message: `No matches found for pattern '${pattern}' in ${searchPath}.${truncationNote}`,
+            };
+        }
+
+        const matchCount = entries.filter(e => e.kind === 'match').length;
+        let message = `Found ${matchCount} match(es) for pattern '${pattern}':\n\n`;
+        for (const entry of entries) {
+            const relFile = path.relative(projectPath, entry.file);
+            const trimmedLine = entry.content.trim();
+            const displayLine = trimmedLine.length > MAX_GREP_MATCH_LINE_LENGTH
+                ? trimmedLine.substring(0, MAX_GREP_MATCH_LINE_LENGTH) + '… [truncated]'
+                : trimmedLine;
+            // Standard grep convention: `:` separator for matches, `-` for context lines.
+            const sep = entry.kind === 'match' ? ':' : '-';
+            message += `${relFile}${sep}${entry.line}${sep} ${displayLine}\n`;
+        }
+        if (wasCapped) {
+            message += `\n(Limited to ${head_limit} lines. Use head_limit parameter to see more.)`;
+        }
+        message += truncationNote;
+
+        logDebug(`[GrepTool] Returned ${entries.length} content lines (${matchCount} matches)`);
+        return {
+            success: true,
+            message: message.trim(),
+        };
     };
 }
 
@@ -1410,74 +1324,102 @@ export function createGlobExecute(projectPath: string): GlobExecuteFn {
     }): Promise<ToolResult> => {
         const { pattern, path: searchPath = '.' } = args;
 
-        console.log(`[GlobTool] Searching for pattern '${pattern}' in ${searchPath}`);
+        logDebug(`[GlobTool] Searching for pattern '${pattern}' in ${searchPath}`);
 
-        try {
-            const pathValidation = validateFilePathSecurity(projectPath, searchPath);
-            if (!pathValidation.valid) {
-                return {
-                    success: false,
-                    message: pathValidation.error!,
-                    error: `Error: ${ErrorMessages.INVALID_FILE_PATH}`
-                };
-            }
-
-            const fullSearchPath = resolveFullPath(projectPath, searchPath);
-
-            if (!fs.existsSync(fullSearchPath)) {
-                return {
-                    success: false,
-                    message: `Path '${searchPath}' does not exist.`,
-                    error: 'Error: Path not found'
-                };
-            }
-
-            // Convert glob pattern to work from search path
-            const globPattern = path.join(fullSearchPath, pattern);
-
-            // Use glob.sync() to find matching files (like Ballerina extension)
-            const rawMatches: string[] = glob.sync(globPattern, { nodir: true });
-            const matches: string[] = rawMatches
-                .map((match) => path.resolve(match))
-                .filter((resolvedMatch) => isPathWithin(fullSearchPath, resolvedMatch));
-
-            // Get file stats and sort by modification time (most recent first)
-            const filesWithStats = matches.map(file => ({
-                file,
-                mtime: fs.statSync(file).mtime.getTime()
-            }));
-
-            filesWithStats.sort((a, b) => b.mtime - a.mtime);
-
-            // Convert to relative paths
-            const relativePaths = filesWithStats.map(f => path.relative(projectPath, f.file));
-
-            if (relativePaths.length === 0) {
-                return {
-                    success: true,
-                    message: `No files found matching pattern '${pattern}' in ${searchPath}.`
-                };
-            }
-
-            let message = `Found ${relativePaths.length} file(s) matching pattern '${pattern}':\n\n`;
-            for (const filePath of relativePaths) {
-                message += `${filePath}\n`;
-            }
-
-            console.log(`[GlobTool] Found ${relativePaths.length} files`);
-            return {
-                success: true,
-                message: message.trim()
-            };
-
-        } catch (error) {
-            console.error(`[GlobTool] Error during search:`, error);
+        // Glob control-character guard.
+        if (/[\r\n\0]/.test(pattern)) {
             return {
                 success: false,
-                message: `Error searching for pattern: ${error instanceof Error ? error.message : String(error)}`,
-                error: `Error: Search failed`
+                message: 'Glob contains invalid control characters.',
+                error: 'Error: Invalid glob pattern',
             };
         }
+
+        const pathValidation = validateFilePathSecurity(projectPath, searchPath, { allowOutsideProject: true });
+        if (!pathValidation.valid) {
+            return {
+                success: false,
+                message: pathValidation.error!,
+                error: `Error: ${ErrorMessages.INVALID_FILE_PATH}`,
+            };
+        }
+
+        const fullSearchPath = resolveFullPath(projectPath, searchPath);
+
+        if (!fs.existsSync(fullSearchPath)) {
+            return {
+                success: false,
+                message: `Path '${searchPath}' does not exist.`,
+                error: 'Error: Path not found',
+            };
+        }
+
+        // rg --files lists every file under the search path; --glob filters the listing.
+        // --no-ignore makes results independent of whether the project has a .gitignore.
+        // We do NOT pass --hidden because dotfiles are usually noise here.
+        // target/ and build/ are intentionally NOT excluded — see createGrepExecute for rationale.
+        const rgArgs: string[] = [
+            '--files',
+            '--no-follow',
+            '--no-ignore',
+            '--glob', pattern,
+        ];
+        for (const dir of RG_EXCLUDED_DIRS) {
+            rgArgs.push('--glob', `!${dir}`);
+        }
+        for (const pat of RG_EXCLUDED_SENSITIVE_GLOBS) {
+            rgArgs.push('--glob', `!${pat}`);
+        }
+        rgArgs.push(fullSearchPath);
+
+        const guarded = await runRipgrepGuarded(rgArgs, projectPath, 'GlobTool');
+        if (guarded.failure) {
+            return guarded.failure;
+        }
+        const rgResult = guarded.result;
+
+        // Resolve to absolute paths so isPathWithin and stat behave deterministically,
+        // then containment-filter as defense in depth against any path-escape edge cases.
+        const matches = parseRgFiles(rgResult.stdout)
+            .map(p => path.isAbsolute(p) ? path.resolve(p) : path.resolve(projectPath, p))
+            .filter(absPath => isPathWithin(fullSearchPath, absPath));
+
+        // Stat in parallel — large monorepo glob results can be hundreds of files.
+        // A file that vanished between rg listing and stat is silently dropped.
+        const statResults = await Promise.all(matches.map(async (file) => {
+            try {
+                const stat = await fs.promises.stat(file);
+                return { file, mtime: stat.mtime.getTime() };
+            } catch {
+                return null;
+            }
+        }));
+        const filesWithStats = statResults.filter((s): s is { file: string; mtime: number } => s !== null);
+        filesWithStats.sort((a, b) => b.mtime - a.mtime);
+
+        const relativePaths = filesWithStats.map(f => path.relative(projectPath, f.file));
+        const truncationNote = rgResult.truncated
+            ? '\n\n(Note: rg output was truncated at 16 MB. Results are partial — narrow your pattern.)'
+            : '';
+
+        if (relativePaths.length === 0) {
+            return {
+                success: true,
+                message: `No files found matching pattern '${pattern}' in ${searchPath}.${truncationNote}`,
+            };
+        }
+
+        let message = `Found ${relativePaths.length} file(s) matching pattern '${pattern}':\n\n`;
+        for (const filePath of relativePaths) {
+            message += `${filePath}\n`;
+        }
+        message += truncationNote;
+
+        logDebug(`[GlobTool] Found ${relativePaths.length} files`);
+        return {
+            success: true,
+            message: message.trim(),
+        };
     };
 }
 
@@ -1566,21 +1508,33 @@ export function createEditTool(execute: EditExecuteFn) {
  */
 
 const grepInputSchema = z.object({
-    pattern: z.string().min(1).max(MAX_GREP_PATTERN_LENGTH).describe(`The regular expression pattern to search for in file contents (max ${MAX_GREP_PATTERN_LENGTH} characters)`),
+    pattern: z.string().min(1).max(MAX_GREP_PATTERN_LENGTH).describe(`The regular expression pattern to search for in file contents`),
     path: z.string().optional().describe(`File or directory to search in (rg PATH). Defaults to current working directory.`),
-    glob: z.string().max(MAX_GREP_GLOB_LENGTH).optional().describe(`Glob pattern to filter files (e.g. "*.js", "*.{ts,tsx}") - maps to rg --glob (max ${MAX_GREP_GLOB_LENGTH} characters)`),
-    type: z.string().optional().describe(`File type to search (rg --type). Common types: js, py, rust, go, java, etc. More efficient than include for standard file types.`),
-    output_mode: z.enum(['content', 'files_with_matches']).optional().describe(`Output mode: "content" shows matching lines (supports -A/-B/-C context, -n line numbers, head_limit), "files_with_matches" shows only file paths (supports head_limit). Defaults to "content".`),
-    '-i': z.boolean().optional().describe(`Case insensitive search`),
-    head_limit: z.number().optional().describe(`Limit the number of results (default: 100)`)
+    glob: z.string().max(MAX_GREP_GLOB_LENGTH).optional().describe(`Glob pattern to filter files (e.g. "*.js", "*.{ts,tsx}") - maps to rg --glob`),
+    type: z.string().optional().describe(`File type to search (rg --type). Run \`rg --type-list\` for the full list of supported types. Common: js, ts, py, rust, go, java, xml.`),
+    output_mode: z.enum(['content', 'files_with_matches', 'count']).optional().describe(`Output mode: "content" shows matching lines (supports -A/-B/-C context, head_limit), "files_with_matches" shows file paths (default), "count" shows match counts per file.`),
+    '-i': z.boolean().optional().describe(`Case insensitive search (rg -i)`),
+    '-A': z.number().int().min(0).max(50).optional().describe(`Number of lines to show after each match (rg -A). Requires output_mode: "content", ignored otherwise.`),
+    '-B': z.number().int().min(0).max(50).optional().describe(`Number of lines to show before each match (rg -B). Requires output_mode: "content", ignored otherwise.`),
+    '-C': z.number().int().min(0).max(50).optional().describe(`Number of lines to show before and after each match (rg -C). Requires output_mode: "content", ignored otherwise.`),
+    multiline: z.boolean().optional().describe(`Enable multiline mode where . matches newlines and patterns can span lines (rg -U --multiline-dotall). Default: false.`),
+    head_limit: z.number().int().min(0).optional().describe(`Limit output to first N lines/entries, equivalent to "| head -N". Works across all output modes: content (limits output lines), files_with_matches (limits file paths), count (limits count entries). Defaults to 100. Pass 0 for unlimited (use sparingly — large result sets waste context).`),
 });
 
 export function createGrepTool(execute: GrepExecuteFn) {
     // Type assertion to avoid TypeScript deep instantiation issues with Zod
     return (tool as any)({
-        description: `Search for regex patterns in project files. Supports glob filtering.
-            Output modes: "content" (matching lines, default) or "files_with_matches" (file paths only).
-            Skips node_modules, .git, target, build, .devtools. Limited to allowed file types: ${getAllowedFileTypesDescription()}.`,
+        description: `A powerful search tool built on ripgrep.
+
+Usage:
+- ALWAYS use this tool for search tasks. NEVER invoke \`grep\` or \`rg\` via the shell tool. This tool has been optimized for correct permissions, sandboxing, and output handling.
+- Supports full regex syntax (e.g., "log.*Error", "function\\s+\\w+")
+- Filter files with the \`glob\` parameter (e.g., "*.xml", "**/*.{xml,yaml}") or the \`type\` parameter (e.g., "xml", "ts", "java"). Run \`rg --type-list\` mentally to recall supported types.
+- Output modes: "content" shows matching lines (verbose — use sparingly), "files_with_matches" shows only file paths (default), "count" shows match counts per file.
+- Pattern syntax: Uses ripgrep, not POSIX grep. Literal braces need escaping (e.g. \`interface\\{\\}\` to find \`interface{}\`).
+- Multiline matching: By default patterns match within a single line only. For cross-line patterns like \`<sequence>[\\s\\S]*?</sequence>\`, set \`multiline: true\`.
+- Skips node_modules, .git, .devtools. Binary files (.car, .class, .jar, etc.) are auto-detected and skipped.
+- target/ and build/ ARE searchable so you can inspect deployed synapse-config under target/<artifact>/synapse-config/ and built artifacts.`,
         inputSchema: grepInputSchema,
         execute
     });
@@ -1598,7 +1552,8 @@ const globInputSchema = z.object({
 export function createGlobTool(execute: GlobExecuteFn) {
     // Type assertion to avoid TypeScript deep instantiation issues with Zod
     return (tool as any)({
-        description: `Find files by glob pattern (e.g., "**/*.xml"). Returns paths sorted by modification time (most recent first).`,
+        description: `Find files by glob pattern (e.g., "**/*.xml") using ripgrep. Returns paths sorted by modification time (most recent first).
+            Skips node_modules, .git, .devtools. target/ and build/ are searchable so you can locate built artifacts and deployed synapse-config files.`,
         inputSchema: globInputSchema,
         execute
     });

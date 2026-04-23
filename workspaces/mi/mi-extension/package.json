@@ -20,7 +20,6 @@
     "onUri"
   ],
   "extensionDependencies": [
-    "wso2.wso2-platform",
     "wso2.wso2-integrator"
   ],
   "main": "./dist/extension.js",
@@ -183,7 +182,7 @@
         "MI.Scope": {
           "type": "string",
           "default": "",
-          "description": "Devant project scope",
+          "description": "WSO2 Cloud project scope",
           "scope": "resource"
         },
         "MI.suppressServerUpdateNotification": {
@@ -1089,6 +1088,7 @@
   "dependencies": {
     "@ai-sdk/amazon-bedrock": "4.0.83",
     "@ai-sdk/anthropic": "3.0.64",
+    "@ai-sdk/mcp": "1.0.29",
     "@anthropic-ai/tokenizer": "0.0.4",
     "@apidevtools/json-schema-ref-parser": "12.0.2",
     "@babel/core": "7.27.1",

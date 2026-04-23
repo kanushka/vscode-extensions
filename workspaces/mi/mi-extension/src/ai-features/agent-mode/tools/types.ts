@@ -116,7 +116,7 @@ export const FILE_READ_TOOL_NAME = 'file_read';
 export const FILE_EDIT_TOOL_NAME = 'file_edit';
 export const FILE_GREP_TOOL_NAME = 'grep';
 export const FILE_GLOB_TOOL_NAME = 'glob';
-export const CONNECTOR_TOOL_NAME = 'get_connector_definitions';
+export const CONNECTOR_TOOL_NAME = 'get_connector_info';
 export const CONTEXT_TOOL_NAME = 'load_context_reference';
 export const MANAGE_CONNECTOR_TOOL_NAME = 'add_or_remove_connector';
 export const VALIDATE_CODE_TOOL_NAME = 'validate_code';
@@ -140,9 +140,6 @@ export const TASK_OUTPUT_TOOL_NAME = 'task_output';
 // Web Tools
 export const WEB_SEARCH_TOOL_NAME = 'web_search';
 export const WEB_FETCH_TOOL_NAME = 'web_fetch';
-
-// Memory Tool (Anthropic native memory_20250818)
-export const MEMORY_TOOL_NAME = 'memory';
 
 // Log Tools
 export const READ_SERVER_LOGS_TOOL_NAME = 'read_server_logs';
@@ -169,8 +166,9 @@ export const DEFERRED_TOOLS = new Set<string>([
     READ_SERVER_LOGS_TOOL_NAME,
 ]);
 
-// DeepWiki MCP Tool (Anthropic prefixes with server name: deepwiki_ask_question)
-export const DEEPWIKI_ASK_QUESTION_TOOL_NAME = 'ask_question';
+// DeepWiki Tool (local MCP client bridge)
+export const DEEPWIKI_MCP_TOOL_NAME = 'ask_question';           // MCP server's actual tool name
+export const DEEPWIKI_ASK_QUESTION_TOOL_NAME = 'deepwiki_ask_question'; // name exposed to Claude
 
 // ============================================================================
 // Subagent Types
@@ -393,6 +391,15 @@ export type WebFetchExecuteFn = (args: {
     prompt: string;
     allowed_domains?: string[];
     blocked_domains?: string[];
+}) => Promise<ToolResult>;
+
+// ============================================================================
+// DeepWiki Tool Execute Function Types
+// ============================================================================
+
+export type DeepWikiAskQuestionExecuteFn = (args: {
+    repoName: string | string[];
+    question: string;
 }) => Promise<ToolResult>;
 
 // ============================================================================
