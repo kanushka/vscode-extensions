@@ -19,7 +19,6 @@
 import { Locator } from "@playwright/test";
 import { MACHINE_VIEW } from "@wso2/mi-core";
 import { ExtendedPage, Form, getVsCodeButton, switchToIFrame } from "@wso2/playwright-vscode-tester";
-import { page } from "../Utils";
 
 export class Welcome {
     private container!: Locator;

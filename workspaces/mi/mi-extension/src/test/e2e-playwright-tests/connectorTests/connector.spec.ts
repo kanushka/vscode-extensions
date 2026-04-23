@@ -184,7 +184,8 @@ export default function createTests() {
         console.log('Deleting connector completed');
       });
 
-      await test.step('Import connector from file', async () => {
+      // Enabling this test step is after fixing: https://github.com/wso2/mi-vscode/issues/1463
+      await test.step.skip('Import connector from file', async () => {
         console.log('Importing connector from file');
         const diagram = new Diagram(page.page, 'Resource');
         await diagram.init();

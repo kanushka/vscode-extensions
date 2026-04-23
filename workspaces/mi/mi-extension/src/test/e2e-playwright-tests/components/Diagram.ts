@@ -234,11 +234,16 @@ export class Diagram {
     }
 
     public async addNewConnectionFromConnectionsTab(index: number = 0) {
+        console.log("Clicking plus button to add new connection");
+        // wait for 2 seconds to ensure that any previous operations are completed and the UI is stable before clicking the plus button
+        await this.diagramWebView.waitForTimeout(2000);
         await this.clickPlusButtonByIndex(index);
 
         const sidePanel = new SidePanel(this.diagramWebView);
         await sidePanel.init();
+        console.log("Navigating to Connections Page");
         await sidePanel.goToConnectionsPage();
+        console.log("Adding new connection");
         await sidePanel.addNewConnection();
     }
 
@@ -483,13 +488,20 @@ export class SidePanel {
     }
 
     public async goToConnectionsPage() {
-        const connectorsPageBtn = this.sidePanel.locator(`vscode-button:text("Connections") >> ..`);
-        await connectorsPageBtn.waitFor();
-        await connectorsPageBtn.click();
+        const resourceView = await switchToIFrame("Resource View", this.container.page());
+        if (!resourceView) {
+            throw new Error("Failed to switch to Resource View iframe");
+        }
+        await resourceView.getByRole('button', { name: ' Connections' }).waitFor();
+        await resourceView.getByRole('button', { name: ' Connections' }).click();
     }
 
     public async addNewConnection() {
-        const addNewConnectionBtn = this.sidePanel.locator(`div:text("Add new connection")`);
+        const resourceView = await switchToIFrame("Resource View", this.container.page());
+        if (!resourceView) {
+            throw new Error("Failed to switch to Resource View iframe");
+        }
+        const addNewConnectionBtn = resourceView.getByTestId('sidepanel').getByText("Add new connection");
         await addNewConnectionBtn.waitFor();
         await addNewConnectionBtn.click();
     }
