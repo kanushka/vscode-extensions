@@ -2,11 +2,11 @@ name: Ballerina Daily Build
 
 on:
   schedule:
-    # 05:17 UTC = 10:47 Colombo (nominal). Off-hour minute avoids GitHub's
-    # high-load batch at :00; actual firing typically drifts 0–30 min later,
-    # landing close to the desired 11:30 Colombo. Exact timing is not
-    # achievable with scheduled triggers — platform limitation.
-    - cron: '17 5 * * *'
+    # 05:30 UTC = 11:00 Colombo (nominal). Actual firing drifts 0–30 min
+    # later; build completes well under an hour, so the run finishes
+    # comfortably before noon Colombo. Exact timing is not achievable
+    # with scheduled triggers — platform limitation.
+    - cron: '30 5 * * *'
   workflow_dispatch:
     inputs:
       sendNotification:
