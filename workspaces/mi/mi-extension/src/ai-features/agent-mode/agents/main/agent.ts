@@ -21,17 +21,16 @@
 // ============================================================================
 export const ENABLE_LANGFUSE = false; // Set to false to disable Langfuse tracing
 export const ENABLE_DEVTOOLS = false; // Set to true to enable AI SDK DevTools (local development only!)
-export const ENABLE_MEMORY_TOOL = false; // Set to true to enable Anthropic native memory tool (persistent project-scoped memory across sessions)
 export const ENABLE_NATIVE_COMPACTION = true; // Set to true to enable Anthropic native server-side compaction (auto-summarizes when context grows large)
 
 // Native compaction trigger threshold in tokens.
 // When input tokens exceed this value, the API auto-compacts the conversation.
 // Must be at least 50,000. Default Anthropic value is 150,000.
-const NATIVE_COMPACTION_TRIGGER_TOKENS = 180000;
+const NATIVE_COMPACTION_TRIGGER_TOKENS = 200000;
 
 import { ModelMessage, streamText, stepCountIs, UserModelMessage, SystemModelMessage, wrapLanguageModel } from 'ai';
 import { AnthropicProviderOptions } from '@ai-sdk/anthropic';
-import { getAnthropicClient, getAnthropicClientForCustomModel, getAnthropicProvider, AnthropicModel, resolveMainModelId } from '../../../connection';
+import { getAnthropicClient, getAnthropicClientForCustomModel, AnthropicModel, resolveMainModelId } from '../../../connection';
 import { getSystemPrompt } from '../main/system';
 import { getUserPrompt, UserPromptParams, UserPromptContentBlock } from './prompt';
 import { addCacheControlToMessages } from '../../../cache-utils';
@@ -43,9 +42,6 @@ import {
     PendingPlanApproval,
 } from '../../tools/plan_mode_tools';
 import { getRuntimeVersionFromPom } from '../../tools/connector_store_cache';
-import { DEEPWIKI_MCP_TOOL_NAMES, DEEPWIKI_MCP_SERVER_CONFIG } from '../../tools/deepwiki_tools';
-import { createMemoryExecute, createReadOnlyMemoryExecute } from '../../tools/memory_tools';
-import { getCopilotProjectMemoriesDir } from '../../storage-paths';
 import {
     createAgentTools,
     FILE_WRITE_TOOL_NAME,
@@ -64,6 +60,7 @@ import {
     KILL_TASK_TOOL_NAME,
     WEB_SEARCH_TOOL_NAME,
     WEB_FETCH_TOOL_NAME,
+    DEEPWIKI_ASK_QUESTION_TOOL_NAME,
 } from './tools';
 import { logInfo, logError, logDebug } from '../../../copilot/logger';
 import { ChatHistoryManager, TOOL_USE_INTERRUPTION_CONTEXT } from '../../chat-history-manager';
@@ -123,8 +120,6 @@ export interface AgentRequest {
     images?: ImageObject[];
     /** Enable Claude thinking mode (reasoning blocks) */
     thinking?: boolean;
-    /** Enable persistent cross-session memory tool */
-    memoryEnabled?: boolean;
     /** Skip per-call web approval prompts when true */
     webAccessPreapproved?: boolean;
     /** Path to the MI project */
@@ -222,7 +217,7 @@ function getStructuredErrorName(error: unknown): string | undefined {
     return typeof name === 'string' ? name : undefined;
 }
 
-function isToolInterruptionAbortError(error: unknown): boolean {
+export function isToolInterruptionAbortError(error: unknown): boolean {
     if (!error) {
         return false;
     }
@@ -445,17 +440,16 @@ export async function executeAgent(
         logInfo(`[Agent] Runtime version detected: ${runtimeVersion ?? 'unknown'}`);
         const systemPromptSelection = getSystemPrompt(runtimeVersion);
 
-        // Resolve memory setting early — needed for both system prompt and tool registration.
-        const memoryEnabled = request.memoryEnabled ?? ENABLE_MEMORY_TOOL;
-
         // System message (cache control will be added dynamically by prepareStep)
-        // Adding a cache block here because tools + system would be same for all users who use our proxy
+        // Adding a cache block here because tools + system would be same for all users who use our proxy.
+        // 1h TTL: system prompt is stable per-session; via proxy it's cross-user-warm (shared org),
+        // and for own-key users it survives idle/thinking gaps >5m. Cache write costs 2× base (vs 1.25× for 5m).
         const systemMessage: SystemModelMessage = {
             role: 'system',
             content: systemPromptSelection.prompt,
             providerOptions: {
                 anthropic: {
-                    cacheControl: { type: 'ephemeral' }
+                    cacheControl: { type: 'ephemeral', ttl: '1h' }
                 }
             }
         } as SystemModelMessage;
@@ -564,29 +558,7 @@ export async function executeAgent(
             modelSettings: request.modelSettings,
         });
 
-        // Add Anthropic native provider tools (memory).
-        // tool_search is now a local tool in createAgentTools — no provider dependency.
-        let finalTools: any = tools;
-        const anthropicProvider = memoryEnabled ? await getAnthropicProvider() : null;
-
-        // Memory tool: project-scoped persistent memory across sessions.
-        // Claude auto-checks /memories at the start of each turn (built-in protocol).
-        // Controlled by user setting (default off) or hardcoded flag for development.
-        if (memoryEnabled && anthropicProvider) {
-            const memoriesDir = getCopilotProjectMemoriesDir(request.projectPath);
-            const mode = request.mode || 'edit';
-            const baseExecute = createMemoryExecute(memoriesDir);
-            const memoryExecute = (mode === 'ask' || mode === 'plan')
-                ? createReadOnlyMemoryExecute(baseExecute)
-                : baseExecute;
-            finalTools = {
-                ...finalTools,
-                memory: anthropicProvider.tools.memory_20250818({
-                    execute: memoryExecute,
-                }),
-            };
-            logInfo(`[Agent] Memory tool enabled (mode=${mode}), dir: ${memoriesDir}`);
-        }
+        const finalTools: any = tools;
 
         // Track step number for logging
         let currentStepNumber = 0;
@@ -707,9 +679,6 @@ export async function executeAgent(
             providerOptions: {
                 anthropic: {
                     ...anthropicOptions,
-                    // DeepWiki MCP — Anthropic handles MCP calls server-side.
-                    // Tool calls appear in the stream as mcp_tool_use / mcp_tool_result blocks.
-                    mcpServers: [DEEPWIKI_MCP_SERVER_CONFIG],
                 },
             },
             prepareStep,
@@ -742,9 +711,10 @@ export async function executeAgent(
                         `Input: ${inputTokens} | Cache Read: ${cachedInputTokens} | ` +
                         `Output: ${outputTokens} | Cache ratio: ${inputTokens > 0 ? (cachedInputTokens / (inputTokens + cachedInputTokens) * 100).toFixed(1) : '0'}%`);
 
-                    // Emit usage event to UI
-                    const totalInputTokens = inputTokens + cachedInputTokens;
-                    emitEvent({ type: 'usage', totalInputTokens });
+                    // Emit usage event to UI.
+                    // AI SDK v6: step.usage.inputTokens is the total (noCache + cacheRead + cacheWrite).
+                    // Do NOT add cachedInputTokens — it's a deprecated alias for cacheReadTokens and would double-count.
+                    emitEvent({ type: 'usage', totalInputTokens: inputTokens });
                 }
 
                 // Save only unsaved messages from this step
@@ -760,9 +730,7 @@ export async function executeAgent(
                         }
 
                         if (unsavedMessages.length > 0) {
-                            const totalInputTokens = step.usage
-                                ? (step.usage.inputTokens || 0) + (step.usage.cachedInputTokens || 0)
-                                : undefined;
+                            const totalInputTokens = step.usage?.inputTokens;
                             await request.chatHistoryManager.saveMessages(
                                 unsavedMessages,
                                 totalInputTokens !== undefined
@@ -1015,10 +983,12 @@ export async function executeAgent(
                         displayInput = { file_path: toolInput?.file_path };
                     } else if (part.toolName === CONNECTOR_TOOL_NAME) {
                         displayInput = {
-                            name: toolInput?.name,
-                            include_full_descriptions: toolInput?.include_full_descriptions,
+                            mode: toolInput?.mode,
+                            artifact_id: toolInput?.artifact_id,
                             operation_names: toolInput?.operation_names,
                             connection_names: toolInput?.connection_names,
+                            parameter_names: toolInput?.parameter_names,
+                            version: toolInput?.version,
                         };
                     } else if (part.toolName === CONTEXT_TOOL_NAME) {
                         displayInput = {
@@ -1027,8 +997,9 @@ export async function executeAgent(
                     } else if (part.toolName === MANAGE_CONNECTOR_TOOL_NAME) {
                         displayInput = {
                             operation: toolInput?.operation,
-                            connector_names: toolInput?.connector_names,
-                            inbound_endpoint_names: toolInput?.inbound_endpoint_names,
+                            connector_artifact_ids: toolInput?.connector_artifact_ids,
+                            inbound_artifact_ids: toolInput?.inbound_artifact_ids,
+                            versions: toolInput?.versions,
                         };
                     } else if (part.toolName === VALIDATE_CODE_TOOL_NAME) {
                         displayInput = {
@@ -1074,9 +1045,11 @@ export async function executeAgent(
                             allowed_domains: toolInput?.allowed_domains,
                             blocked_domains: toolInput?.blocked_domains,
                         };
-                    } else if (DEEPWIKI_MCP_TOOL_NAMES.includes(part.toolName)) {
-                        // DeepWiki MCP tools — pass through all input for display
-                        displayInput = toolInput;
+                    } else if (part.toolName === DEEPWIKI_ASK_QUESTION_TOOL_NAME) {
+                        displayInput = {
+                            repoName: toolInput?.repoName,
+                            question: toolInput?.question,
+                        };
                     }
 
                     // Skip tool call UI for todo_write (handled by inline todo list)

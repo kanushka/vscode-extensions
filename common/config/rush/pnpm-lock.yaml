@@ -4085,6 +4085,9 @@ importers:
       '@ai-sdk/anthropic':
         specifier: 3.0.64
         version: 3.0.64(zod@4.1.11)
+      '@ai-sdk/mcp':
+        specifier: 1.0.29
+        version: 1.0.29(zod@4.1.11)
       '@anthropic-ai/tokenizer':
         specifier: 0.0.4
         version: 0.0.4
@@ -5023,8 +5026,20 @@ packages:
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
 
+  '@ai-sdk/mcp@1.0.29':
+    resolution: {integrity: sha512-P33ZD2a7Usz+LT5QeKa2hSaFUihCuTF72DuJReJlWAUAO0xG+K/l0BpgIHRIj24/95xtp1VufNZLlbtaeUSqjA==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
   '@ai-sdk/provider-utils@4.0.15':
     resolution: {integrity: sha512-8XiKWbemmCbvNN0CLR9u3PQiet4gtEVIrX4zzLxnCj06AwsEDJwJVBbKrEI4t6qE8XRSIvU2irka0dcpziKW6w==}
+    engines: {node: '>=18'}
+    peerDependencies:
+      zod: ^3.25.76 || ^4.1.8
+
+  '@ai-sdk/provider-utils@4.0.20':
+    resolution: {integrity: sha512-gpUIj9uDhIGbuo9afKEgQ074BWmhvK4THJAAeBjRnroTy2yQYo6rbtGD7pQDMZM8ouXPYmT/SCdkWVJ0KcpX8A==}
     engines: {node: '>=18'}
     peerDependencies:
       zod: ^3.25.76 || ^4.1.8
@@ -25448,12 +25463,26 @@ snapshots:
       '@ai-sdk/provider-utils': 4.0.21(zod@4.1.8)
       zod: 4.1.8
 
+  '@ai-sdk/mcp@1.0.29(zod@4.1.11)':
+    dependencies:
+      '@ai-sdk/provider': 3.0.8
+      '@ai-sdk/provider-utils': 4.0.20(zod@4.1.11)
+      pkce-challenge: 5.0.1
+      zod: 4.1.11
+
   '@ai-sdk/provider-utils@4.0.15(zod@4.1.8)':
     dependencies:
       '@ai-sdk/provider': 3.0.8
       '@standard-schema/spec': 1.1.0
       eventsource-parser: 3.0.8
       zod: 4.1.8
+
+  '@ai-sdk/provider-utils@4.0.20(zod@4.1.11)':
+    dependencies:
+      '@ai-sdk/provider': 3.0.8
+      '@standard-schema/spec': 1.1.0
+      eventsource-parser: 3.0.6
+      zod: 4.1.11
 
   '@ai-sdk/provider-utils@4.0.21(zod@4.1.11)':
     dependencies:

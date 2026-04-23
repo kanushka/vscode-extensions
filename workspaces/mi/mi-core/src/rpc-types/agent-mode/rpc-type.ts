@@ -40,8 +40,6 @@ import {
     SearchMentionablePathsResponse,
     GetAgentRunStatusRequest,
     GetAgentRunStatusResponse,
-    ClearAgentMemoryResponse,
-    OpenAgentMemoryFolderResponse,
 } from "./types";
 
 const _prefix = "mi-agent-service";
@@ -130,18 +128,4 @@ export const searchMentionablePaths: RequestType<SearchMentionablePathsRequest, 
 // Get current agent run status and buffered events for panel reconnection
 export const getAgentRunStatus: RequestType<GetAgentRunStatusRequest, GetAgentRunStatusResponse> = {
     method: `${_prefix}/getAgentRunStatus`
-};
-
-// ============================================================================
-// Memory Management RPC Methods
-// ============================================================================
-
-// Clear all agent memory files for the current project
-export const clearAgentMemory: RequestType<void, ClearAgentMemoryResponse> = {
-    method: `${_prefix}/clearAgentMemory`
-};
-
-// Open the agent memory folder in the system file explorer
-export const openAgentMemoryFolder: RequestType<void, OpenAgentMemoryFolderResponse> = {
-    method: `${_prefix}/openAgentMemoryFolder`
 };

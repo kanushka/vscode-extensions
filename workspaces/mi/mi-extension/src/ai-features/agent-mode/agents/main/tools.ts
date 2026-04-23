@@ -93,6 +93,10 @@ import {
     createReadServerLogsTool,
     createReadServerLogsExecute,
 } from '../../tools/log_tools';
+import {
+    createDeepWikiTool,
+    createDeepWikiExecute,
+} from '../../tools/deepwiki_tools';
 import { createToolSearchTool } from '../../tools/tool_load';
 import { AnthropicModel, resolveMainModelId } from '../../../connection';
 import { AgentMode, ModelSettings } from '@wso2/mi-core';
@@ -124,6 +128,7 @@ import {
     ToolResult,
     WEB_SEARCH_TOOL_NAME,
     WEB_FETCH_TOOL_NAME,
+    DEEPWIKI_ASK_QUESTION_TOOL_NAME,
     READ_SERVER_LOGS_TOOL_NAME,
     TOOL_LOAD_TOOL_NAME,
     ShellApprovalRuleStore,
@@ -160,6 +165,7 @@ export {
     TASK_OUTPUT_TOOL_NAME,
     WEB_SEARCH_TOOL_NAME,
     WEB_FETCH_TOOL_NAME,
+    DEEPWIKI_ASK_QUESTION_TOOL_NAME,
     READ_SERVER_LOGS_TOOL_NAME,
     TOOL_LOAD_TOOL_NAME,
 };
@@ -208,6 +214,7 @@ const READ_ONLY_MODE_ALLOWED_TOOLS = new Set<string>([
     VALIDATE_CODE_TOOL_NAME,
     WEB_SEARCH_TOOL_NAME,
     WEB_FETCH_TOOL_NAME,
+    DEEPWIKI_ASK_QUESTION_TOOL_NAME,
     SERVER_MANAGEMENT_TOOL_NAME,
     READ_SERVER_LOGS_TOOL_NAME,
 ]);
@@ -541,7 +548,7 @@ function createToolExecutionPipeline<T extends (...args: any[]) => Promise<ToolR
  * This ensures consistent tool definitions across main agent and compact agent.
  *
  * @param params - Tool creation parameters
- * @returns Tools object with all 23 tools
+ * @returns Tools object with all agent tools
  */
 export function createAgentTools(params: CreateToolsParams) {
     const {
@@ -605,7 +612,7 @@ export function createAgentTools(params: CreateToolsParams) {
 
         // Connector Tools (2 tools)
         [CONNECTOR_TOOL_NAME]: createConnectorTool(
-            getWrappedExecute(CONNECTOR_TOOL_NAME, createConnectorExecute(projectPath))
+            getWrappedExecute(CONNECTOR_TOOL_NAME, createConnectorExecute(projectPath, abortSignal))
         ),
         [CONTEXT_TOOL_NAME]: createContextTool(
             getWrappedExecute(CONTEXT_TOOL_NAME, createContextExecute(projectPath), false)
@@ -613,7 +620,7 @@ export function createAgentTools(params: CreateToolsParams) {
 
         // Project Tools (1 tool)
         [MANAGE_CONNECTOR_TOOL_NAME]: createManageConnectorTool(
-            getWrappedExecute(MANAGE_CONNECTOR_TOOL_NAME, createManageConnectorExecute(projectPath, undoCheckpointManager))
+            getWrappedExecute(MANAGE_CONNECTOR_TOOL_NAME, createManageConnectorExecute(projectPath, undoCheckpointManager, abortSignal))
         ),
 
         // LSP Tools (1 tool)
@@ -623,10 +630,10 @@ export function createAgentTools(params: CreateToolsParams) {
 
         // Data Mapper Tools (2 tools)
         [CREATE_DATA_MAPPER_TOOL_NAME]: createCreateDataMapperTool(
-            getWrappedExecute(CREATE_DATA_MAPPER_TOOL_NAME, createCreateDataMapperExecute(projectPath, modifiedFiles, undoCheckpointManager))
+            getWrappedExecute(CREATE_DATA_MAPPER_TOOL_NAME, createCreateDataMapperExecute(projectPath, modifiedFiles, undoCheckpointManager, abortSignal))
         ),
         [GENERATE_DATA_MAPPING_TOOL_NAME]: createGenerateDataMappingTool(
-            getWrappedExecute(GENERATE_DATA_MAPPING_TOOL_NAME, createGenerateDataMappingExecute(projectPath, modifiedFiles, undoCheckpointManager))
+            getWrappedExecute(GENERATE_DATA_MAPPING_TOOL_NAME, createGenerateDataMappingExecute(projectPath, modifiedFiles, undoCheckpointManager, abortSignal))
         ),
 
         // Runtime Tools (2 tools)
@@ -669,7 +676,8 @@ export function createAgentTools(params: CreateToolsParams) {
                 webAccessPreapproved,
                 sessionId,
                 mainModelId,
-                mainModelIsCustom
+                mainModelIsCustom,
+                abortSignal
             ))
         ),
         [WEB_FETCH_TOOL_NAME]: createWebFetchTool(
@@ -680,8 +688,12 @@ export function createAgentTools(params: CreateToolsParams) {
                 webAccessPreapproved,
                 sessionId,
                 mainModelId,
-                mainModelIsCustom
+                mainModelIsCustom,
+                abortSignal
             ))
+        ),
+        [DEEPWIKI_ASK_QUESTION_TOOL_NAME]: createDeepWikiTool(
+            getWrappedExecute(DEEPWIKI_ASK_QUESTION_TOOL_NAME, createDeepWikiExecute(abortSignal))
         ),
 
         // Log Tools (1 tool)

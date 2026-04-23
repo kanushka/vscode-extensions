@@ -45,8 +45,6 @@ import {
     GetAgentRunStatusRequest,
     GetAgentRunStatusResponse,
     ModelSettings,
-    ClearAgentMemoryResponse,
-    OpenAgentMemoryFolderResponse,
 } from '@wso2/mi-core';
 import * as crypto from 'crypto';
 import type { Dirent } from 'fs';
@@ -55,6 +53,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import { AgentEventHandler } from './event-handler';
 import { executeAgent, createAgentAbortController, AgentEvent } from '../../ai-features/agent-mode';
+import { isToolInterruptionAbortError } from '../../ai-features/agent-mode/agents/main/agent';
 import { logInfo, logError, logDebug } from '../../ai-features/copilot/logger';
 import {
     ChatHistoryManager,
@@ -75,7 +74,7 @@ import { cleanupRunningBackgroundSubagents } from '../../ai-features/agent-mode/
 import { beginServerManagementRunTracking, cleanupServerManagementOnAgentEnd } from '../../ai-features/agent-mode/tools/runtime_tools';
 import { AgentUndoCheckpointManager, SnapshotRestorePlan } from '../../ai-features/agent-mode/undo/checkpoint-manager';
 import { MiDiagramRpcManager } from '../mi-diagram/rpc-manager';
-import { getCopilotSessionDir, getCopilotProjectMemoriesDir } from '../../ai-features/agent-mode/storage-paths';
+import { getCopilotSessionDir } from '../../ai-features/agent-mode/storage-paths';
 
 const DEFAULT_MODEL_SETTINGS: ModelSettings = { mainModelPreset: 'sonnet', subModelPreset: 'haiku' };
 const AGENT_RUN_IN_PROGRESS_ERROR = 'Another agent run is already in progress. Wait for it to finish or abort it before sending a new message.';
@@ -726,7 +725,7 @@ export class MIAgentPanelRpcManager implements MIAgentPanelAPI {
         let activeCheckpointId: string | undefined;
         try {
             beginServerManagementRunTracking();
-            this.eventHandler.beginRun();
+            this.eventHandler.beginRun(request.chatId);
             const messageLength = typeof request.message === 'string' ? request.message.length : 0;
             logInfo(
                 `[AgentPanel] Received message request (chatId=${request.chatId}, mode=${request.mode || this.currentMode || DEFAULT_AGENT_MODE}, messageLength=${messageLength})`
@@ -813,7 +812,6 @@ export class MIAgentPanelRpcManager implements MIAgentPanelAPI {
                             files: request.files,
                             images: request.images,
                             thinking: request.thinking ?? true,
-                            memoryEnabled: request.memoryEnabled,
                             webAccessPreapproved: request.webAccessPreapproved,
                             projectPath: this.projectUri,
                             sessionId: this.currentSessionId || undefined,
@@ -904,6 +902,22 @@ export class MIAgentPanelRpcManager implements MIAgentPanelAPI {
                     logError('[AgentPanel] Failed to discard pending undo checkpoint run', discardError);
                 }
             }
+
+            // If the error escaped here due to a user interrupt (e.g. during the continuation-approval
+            // window, or pre-streamText setup), the main agent's catch in executeAgent never ran,
+            // so no 'abort' event was emitted and no interruption reminder was saved. Cover both here
+            // so the UI hides the Interrupt button via a terminal event and the model sees a
+            // system-reminder on the next turn.
+            if (isToolInterruptionAbortError(error)) {
+                try {
+                    const historyManager = await this.getChatHistoryManager();
+                    await historyManager.saveInterruptionMessage(false);
+                } catch (saveError) {
+                    logError('[AgentPanel] Failed to save interruption reminder in rpc-manager catch', saveError);
+                }
+                this.eventHandler.handleEvent({ type: 'abort' });
+            }
+
             return {
                 success: false,
                 checkpointId: activeCheckpointId,
@@ -1636,41 +1650,6 @@ export class MIAgentPanelRpcManager implements MIAgentPanelAPI {
                 success: false,
                 items: [],
                 error: error instanceof Error ? error.message : 'Failed to search mentionable paths',
-            };
-        }
-    }
-
-    // ========================================================================
-    // Memory Management
-    // ========================================================================
-
-    async clearAgentMemory(): Promise<ClearAgentMemoryResponse> {
-        try {
-            const memoriesDir = getCopilotProjectMemoriesDir(this.projectUri);
-            await fs.rm(memoriesDir, { recursive: true, force: true });
-            logInfo(`[AgentPanel] Cleared agent memory: ${memoriesDir}`);
-            return { success: true };
-        } catch (error) {
-            logError('[AgentPanel] Failed to clear agent memory', error);
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : 'Failed to clear agent memory',
-            };
-        }
-    }
-
-    async openAgentMemoryFolder(): Promise<OpenAgentMemoryFolderResponse> {
-        try {
-            const memoriesDir = getCopilotProjectMemoriesDir(this.projectUri);
-            // Ensure directory exists before opening
-            await fs.mkdir(memoriesDir, { recursive: true });
-            await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(memoriesDir));
-            return { success: true };
-        } catch (error) {
-            logError('[AgentPanel] Failed to open agent memory folder', error);
-            return {
-                success: false,
-                error: error instanceof Error ? error.message : 'Failed to open memory folder',
             };
         }
     }
