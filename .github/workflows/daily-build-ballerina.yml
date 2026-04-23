@@ -267,7 +267,6 @@ jobs:
           vsix='${{ steps.vsix.outputs.fileName }}'
           lsArtifact='${{ steps.ls.outputs.lsArtifactName }}'
           lsRunId='${{ steps.ls.outputs.lsRunId }}'
-          lsRunConc='${{ steps.ls.outputs.lsRunConclusion }}'
           lsRunUrl="https://github.com/ballerina-platform/ballerina-language-server/actions/runs/${lsRunId}"
 
           {
@@ -278,7 +277,7 @@ jobs:
             echo "| Version | \`${version}\` |"
             echo "| VSIX | \`${vsix}\` |"
             echo "| LS JAR | \`${lsArtifact}\` |"
-            echo "| LS source run | [${lsRunId}](${lsRunUrl}) (conclusion: ${lsRunConc}) |"
+            echo "| LS source run | [${lsRunId}](${lsRunUrl}) |"
             echo ""
             echo "#### Snapshot tests"
             echo ""
@@ -409,9 +408,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.CHOREO_BOT_TOKEN }}
           NEW_VERSION: ${{ steps.meta.outputs.version }}
-          LS_VERSION: ${{ steps.meta.outputs.lsVersion }}
+          LS_ARTIFACT_NAME: ${{ steps.meta.outputs.lsArtifactName }}
           LS_RUN_ID: ${{ steps.meta.outputs.lsRunId }}
-          LS_RUN_CONCLUSION: ${{ steps.meta.outputs.lsRunConclusion }}
           SOURCE_BRANCH: ${{ matrix.vscodeBranch }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -426,14 +424,17 @@ jobs:
           fi
           VSIX_FILE="${files[0]}"
 
+          # Display the full snapshot name (with timestamp) rather than the
+          # stripped version — traceability to the exact LS build.
+          LS_SNAPSHOT="${LS_ARTIFACT_NAME#ballerina-language-server-}"
+          LS_SNAPSHOT="${LS_SNAPSHOT%.jar}"
           LS_RUN_URL="https://github.com/ballerina-platform/ballerina-language-server/actions/runs/${LS_RUN_ID}"
           body=$(jq -n \
             --arg branch "$SOURCE_BRANCH" \
-            --arg ls "$LS_VERSION" \
+            --arg ls "$LS_SNAPSHOT" \
             --arg lsRun "$LS_RUN_URL" \
-            --arg lsConc "$LS_RUN_CONCLUSION" \
             --arg run "$RUN_URL" \
-            '"Automated daily build.\n\n- Source branch: `\($branch)`\n- Ballerina language server: `\($ls)`\n- LS run: \($lsRun) (conclusion: `\($lsConc)`)\n- Workflow run: \($run)"')
+            '"Automated daily build.\n\n- Source branch: `\($branch)`\n- Ballerina language server: `\($ls)`\n- LS run: \($lsRun)\n- Workflow run: \($run)"')
 
           payload=$(jq -n \
             --arg tag "$TAG" \
