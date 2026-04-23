@@ -75,8 +75,11 @@ export async function createProject(page: ExtendedPage, projectName?: string, ru
     console.log('Initializing Welcome page and creating new project');
     const welcomePage = new Welcome(page);
     await welcomePage.init();
+    console.log('Switching to MI Extension in Welcome page');
     await welcomePage.switchToMIExtension();
+    console.log('Creating new project');
     await welcomePage.createNewProject();
+    console.log('Creating new integration');
     await welcomePage.createNewIntegration(projectName, runtimeVersion, newProjectPath, addAdvancedConfig);
 }
 

@@ -78,12 +78,8 @@ export class Welcome {
         console.log('Filled the project creation form with project name, runtime version and location');
         if (addAdvancedConfig) {
             console.log('Adding advanced configuration to the project');
-            const webView = await switchToIFrame('Project Creation Form', this.page.page);
-            if (!webView) {
-                throw new Error("Failed to switch to Project Creation Form iframe");
-            }
-            await webView.locator('vscode-button[title="Expand"]').click();
-            await webView.getByRole('textbox', { name: 'Artifact Id*' }).fill('test');
+            await this.container.getByTitle('Expand').locator('i').click();
+            await this.container.getByRole('textbox', { name: 'Artifact Id*' }).fill('test');
         }
         console.log('Submitting the project creation form');
         await this.container.getByRole('button', { name: 'Create Project' }).click();
@@ -99,6 +95,7 @@ export class Welcome {
     }
 
     public async createNewProjectFromSample(projectName: string, path: string) {
+        console.log('Creating new project from sample');
         await this.container.getByText(projectName).click({ force: true });
         const fileInput = await this.page.page?.waitForSelector('.quick-input-header');
         const textInput = await fileInput?.waitForSelector('input[type="text"]');
