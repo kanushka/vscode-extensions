@@ -92,7 +92,6 @@ export default function createTests() {
                 console.log("Closed Workspace");
                 await createProject(page, 'newProjectWithAdConfig', '4.4.0', true);
                 console.log("Project Created");
-                await page.page.pause();
                 await waitUntilPomContains(page.page, path.join(newProjectPath, 'newProjectWithAdConfig', 'pom.xml'), 
                 '<artifactId>test</artifactId>');
                 console.log('New project with advanced config created successfully');
