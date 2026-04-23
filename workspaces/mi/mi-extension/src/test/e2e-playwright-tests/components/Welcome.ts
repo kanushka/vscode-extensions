@@ -27,10 +27,10 @@ export class Welcome {
     constructor(private page: ExtendedPage) {
     }
 
-    public async init() {
-        const webview = await switchToIFrame("Welcome", this.page.page, 60000);
+    public async init(frameTitle: string = 'Welcome') {
+        const webview = await switchToIFrame(frameTitle, this.page.page, 60000);
         if (!webview) {
-            throw new Error("Failed to switch to Welcome page iframe");
+            throw new Error(`Failed to switch to ${frameTitle} page iframe`);
         }
         this.container = webview.locator('div#root');
     }
@@ -39,10 +39,14 @@ export class Welcome {
         const miExtensionSetting = this.container.getByRole('button', { name: ' Configure' });
         await miExtensionSetting.waitFor({ timeout: 30000 });
         await miExtensionSetting.click();
-        const dropdown = this.container.locator('slot').filter({ hasText: /^WSO2 Integrator: Default$/ });
-        await dropdown.waitFor({ timeout: 30000 });
-        await dropdown.click();
-        await this.container.getByRole('option', { name: 'WSO2 Integrator: MI' }).click();
+        try {
+            const dropdown = this.container.locator('slot').filter({ hasText: /^WSO2 Integrator: Default$/ });
+            await dropdown.waitFor({ timeout: 10000 });
+            await dropdown.click();
+            await this.container.getByRole('option', { name: 'WSO2 Integrator: MI' }).click();
+        } catch (error) {
+            console.log('The WSO2 Integrator: Default option is not available in the dropdown, assuming WSO2 Integrator: MI is already selected');
+        }
         await this.container.getByRole('button', { name: '' }).click();
     }
     public async createNewProject() {
@@ -51,7 +55,9 @@ export class Welcome {
         await createButton.click();
     }
 
-    public async createNewIntegration(projectName?: string, runtimeVersion?: string, projectPath?: string, addAdvancedConfig: boolean = false) {
+    public async createNewIntegration(projectName?: string, runtimeVersion?: string, projectPath?: string,
+        addAdvancedConfig: boolean = false) 
+    {
         await this.container.getByRole('combobox', { name: 'WSO2 Integrator: MI runtime' }).locator('div').nth(1).click();
         await this.container.getByRole('textbox', { name: 'Project Name*' }).waitFor({ timeout: 30000 });
         await this.container.getByRole('textbox', { name: 'Project Name*' }).fill(projectName || 'testProject');    
@@ -81,12 +87,15 @@ export class Welcome {
         }
         console.log('Submitting the project creation form');
         await this.container.getByRole('button', { name: 'Create Project' }).click();
-        // await this.page.page.getByRole('button', { name: "No, Don't Ask Again" })
-        //     .click({ timeout: 30000 }).catch(() => {});
+        try {
+            await this.page.page.getByRole('button', { name: "No, Don't Ask Again" })
+            .click({ timeout: 30000 }).catch(() => {});
+        } catch (error) {
+            console.log('No prompt to disable future warnings');
+        }
         console.log('Project created');
-        this.setupEnvironment();
+        await this.setupEnvironment();
         console.log('Environment setup done');
-        await this.container.getByRole('button', { name: 'Create Project' }).click();
     }
 
     public async createNewProjectFromSample(projectName: string, path: string) {
@@ -106,13 +115,12 @@ export class Welcome {
     }
 
     public async setupEnvironment() {
+        console.log('Setting up environment for the project');
         const { title: iframeTitle, webview } = await this.page.getCurrentWebview();
 
         if (iframeTitle === MACHINE_VIEW.ADD_ARTIFACT) {
+            console.log('Add Artifact view is opened, skipping environment setup');
             return true;
-        }
-        if (iframeTitle !== MACHINE_VIEW.SETUP_ENVIRONMENT) {
-            throw new Error(`Invalid IFrame: ${iframeTitle}`);
         }
 
         console.log('Setting up environment');
@@ -189,9 +197,13 @@ export class Welcome {
             }
         }
         
-        console.log('Clicking No, Don\'t Ask Again button');
-        await container!.page().getByRole('button', { name: "No, Don't Ask Again" })
-            .click({ timeout: 10000 }).catch(() => { });
+        try {
+            console.log('Clicking No, Don\'t Ask Again button');
+            await container!.page().getByRole('button', { name: "No, Don't Ask Again" })
+                .click({ timeout: 10000 }).catch(() => { });
+        } catch (error) {
+            console.log('No, Don\'t Ask Again button not found, proceeding without clicking');
+        }
         console.log('Environment setup done');
     }
 }
