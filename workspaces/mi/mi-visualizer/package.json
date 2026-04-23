@@ -52,7 +52,7 @@
     "xmlbuilder2": "3.1.1",
     "@types/swagger-ui-react": "5.18.0",
     "swagger-ui-react": "5.21.0",
-    "uuid": "11.1.0",
+    "uuid": "14.0.0",
     "@types/uuid": "10.0.0",
     "react-hot-loader": "4.13.1",
     "@pmmmwh/react-refresh-webpack-plugin": "0.6.0",
