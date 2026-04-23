@@ -322,7 +322,7 @@ import { RPCLayer } from "../../RPCLayer";
 import { StateMachineAI } from '../../ai-features/aiMachine';
 import {
     getAccessToken as getCopilotAccessToken,
-    getPlatformExtensionAPI,
+    getIntegratorExtensionAPI,
     getCopilotLlmApiBaseUrl,
     getLoginMethod as getCopilotLoginMethod,
     getRefreshedAccessToken as refreshCopilotAccessToken,
@@ -352,10 +352,9 @@ import path = require("path");
 import { importCapp } from "../../util/importCapp";
 import { compareVersions, filterConnectorVersion, generateInitialDependencies, getDefaultProjectPath, getMIVersionFromPom, buildBallerinaModule, updatePomForClassMediator, isConsolidatedProject, getProjectJavaVersion } from "../../util/onboardingUtils";
 import { Range as STRange } from '@wso2/mi-syntax-tree/lib/src';
-import { checkForDevantExt } from "../../extension";
+import { checkForWso2IntegratorExt } from "../../extension";
 import { getAPIMetadata } from "../../util/template-engine/mustach-templates/API";
-import { DevantScopes } from "@wso2/wso2-platform-core";
-import { ICreateComponentCmdParams, CommandIds as PlatformExtCommandIds } from "@wso2/wso2-platform-core";
+import { WICommandIds, ICreateNewIntegrationCmdParams } from "@wso2/wso2-platform-core";
 import { MiVisualizerRpcManager } from "../mi-visualizer/rpc-manager";
 import { DebuggerConfig } from "../../debugger/config";
 import { getKubernetesConfiguration, getKubernetesDataConfiguration } from "../../util/template-engine/mustach-templates/KubernetesConfiguration";
@@ -5212,21 +5211,15 @@ ${keyValuesXML}`;
 
     async deployProject(params: DeployProjectRequest): Promise<DeployProjectResponse> {
         return new Promise(async (resolve) => {
-            if (!checkForDevantExt()) {
+            if (!checkForWso2IntegratorExt()) {
                 return;
             }
-            const params: ICreateComponentCmdParams = {
-                buildPackLang: "microintegrator",
-                name: path.basename(this.projectUri),
-                componentDir: this.projectUri,
-                extName: "Devant",
-            };
 
             const langClient = await MILanguageClient.getInstance(this.projectUri);
 
             let integrationType: string | undefined;
-            if (params.componentDir) {
-                const rootPath = (await this.getProjectRoot({ path: params.componentDir })).path;
+            if (this.projectUri) {
+                const rootPath = (await this.getProjectRoot({ path: this.projectUri })).path;
                 const resp = await langClient.getProjectIntegrationType(rootPath);
 
                 function mapTypeToScope(type: string): string | undefined {
@@ -5266,9 +5259,17 @@ ${keyValuesXML}`;
                     return { success: false };
                 }
 
-                const paramsWithType: ICreateComponentCmdParams = { ...params, integrationType: integrationType as DevantScopes, };
-
-                commands.executeCommand(PlatformExtCommandIds.CreateNewComponent, paramsWithType);
+                const paramsWithType: ICreateNewIntegrationCmdParams = { 
+                    buildPackLang: "microintegrator", 
+                    workspaceDir: this.projectUri, 
+                    integrations: [{ 
+                        fsPath: this.projectUri, 
+                        name: path.basename(this.projectUri), 
+                        supportedIntegrationTypes: [integrationType]
+                    }]
+                }
+                
+                commands.executeCommand(WICommandIds.CreateNewComponent, paramsWithType);
                 resolve({ success: true });
 
             } else {
@@ -5291,7 +5292,7 @@ ${keyValuesXML}`;
                 }
             }
 
-            const platformExtAPI = await getPlatformExtensionAPI();
+            const platformExtAPI = await getIntegratorExtensionAPI();
             if (!platformExtAPI) {
                 return { hasComponent: hasContextYaml, isLoggedIn: false, hasLocalChanges: false };
             }

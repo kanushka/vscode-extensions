@@ -40,8 +40,6 @@ export interface SendAgentMessageRequest {
     images?: ImageObject[];
     /** Enable Claude thinking mode (reasoning blocks) */
     thinking?: boolean;
-    /** Enable persistent cross-session memory tool */
-    memoryEnabled?: boolean;
     /** When true, web_search and web_fetch run without per-call approval prompts */
     webAccessPreapproved?: boolean;
     /** Chat history for context (AI SDK format with tool calls/results) */
@@ -232,6 +230,12 @@ export interface AgentEvent {
     type: AgentEventType;
     /** Monotonic sequence number assigned by the event handler (used for polling dedup) */
     seq?: number;
+    /**
+     * Stable UI chat id the event belongs to. Stamped on every event at
+     * emit time so the frontend can drop late events from a previously
+     * interrupted run after a new run has already started.
+     */
+    chatId?: number;
     content?: string;
     /** Thinking block ID for thinking_* events */
     thinkingId?: string;
@@ -564,20 +568,6 @@ export interface GetAgentRunStatusResponse {
     mode?: AgentMode;
 }
 
-// ============================================================================
-// Memory Management Types
-// ============================================================================
-
-export interface ClearAgentMemoryResponse {
-    success: boolean;
-    error?: string;
-}
-
-export interface OpenAgentMemoryFolderResponse {
-    success: boolean;
-    error?: string;
-}
-
 /**
  * Agent Panel API interface
  */
@@ -599,7 +589,4 @@ export interface MIAgentPanelAPI {
     searchMentionablePaths: (request: SearchMentionablePathsRequest) => Promise<SearchMentionablePathsResponse>;
     // Agent run status for panel reconnection
     getAgentRunStatus: (request?: GetAgentRunStatusRequest) => Promise<GetAgentRunStatusResponse>;
-    // Memory management
-    clearAgentMemory: () => Promise<ClearAgentMemoryResponse>;
-    openAgentMemoryFolder: () => Promise<OpenAgentMemoryFolderResponse>;
 }

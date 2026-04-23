@@ -44,7 +44,24 @@ export {
     // Utility functions
     getAvailableConnectors,
     getAvailableInboundEndpoints,
+    buildLSHighLevelSummary,
 } from './connector_tools';
+
+// Export connector LS client
+export {
+    getConnectorInfoFromLS,
+    getInboundInfoFromLS,
+    getLocalInboundCatalog,
+    readOutputSchema,
+    type LSConnectorResult,
+    type LSConnectorOperation,
+    type LSConnectorConnection,
+    type LSConnectorParameter,
+    type LSInboundResult,
+    type LSInboundParameter,
+    type LocalInboundCatalog,
+    type LocalInboundCatalogEntry,
+} from './connector_ls_client';
 
 // Export deep-context tools
 export {
@@ -149,10 +166,10 @@ export {
     createWebFetchTool,
 } from './web_tools';
 
-// Export deepwiki MCP constants
+// Export DeepWiki tool
 export {
-    DEEPWIKI_MCP_SERVER_CONFIG,
-    DEEPWIKI_MCP_TOOL_NAMES,
+    createDeepWikiExecute,
+    createDeepWikiTool,
 } from './deepwiki_tools';
 
 // Export log tools
