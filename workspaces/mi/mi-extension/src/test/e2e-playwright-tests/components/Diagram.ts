@@ -406,35 +406,28 @@ export class SidePanel {
     }
 
     public async downloadConnector(name: string, version?: string, inDrawer?: boolean) {
-        const drawer = inDrawer ? this.sidePanel.locator(`#drawer1`) : this.sidePanel;
-        const connector = drawer.locator(`#card-select-${name}`);
+        const resourceView = await switchToIFrame("Resource View", this.container.page());
+        if (!resourceView) {
+            throw new Error("Failed to switch to Resource View iframe");
+        }
+        const connector = resourceView.getByTestId('sidepanel').getByText(name);
         await connector.waitFor();
 
         if (version) {
             await connector.click();
-            const connectorComponent = connector.locator(`..`);
-
-            const parentDiv = connectorComponent.locator(`label:text("Version")`).locator('../../..');
-            await parentDiv.waitFor();
-            const input = parentDiv.locator('input[role="combobox"]');
-            await input.click();
-            const option = parentDiv.locator(`li:has-text("${version}")`);
-            await option.click();
-
-            const versionInput = this.sidePanel.locator(`input[value="${version}"]`);
-            await versionInput.waitFor({ state: 'attached' });
+            await resourceView.getByRole('button', { name: '' }).click();
+            await resourceView.getByText(version).waitFor();
+            await resourceView.getByText(version).click();
         }
-        const downloadBtn = connector.locator(`.download-icon`);
-        await downloadBtn.waitFor();
-        await downloadBtn.click();
+
+        
+        await resourceView.locator(`#card-select-${name} i`).first().waitFor();
+        await resourceView.locator(`#card-select-${name} i`).first().click();
 
         await this.confirmDownloadDependency();
 
         const loader = this.sidePanel.locator(`span:text("Downloading Module...")`);
         await loader.waitFor({ state: "detached", timeout: 300000 });
-
-        const downloadedConnector = drawer.locator(`#card-select-${name}`);
-        await downloadedConnector.waitFor();
     }
 
     public async deleteConnector(connectorName: string) {
