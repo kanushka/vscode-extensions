@@ -235,8 +235,6 @@ export class Diagram {
 
     public async addNewConnectionFromConnectionsTab(index: number = 0) {
         console.log("Clicking plus button to add new connection");
-        // wait for 2 seconds to ensure that any previous operations are completed and the UI is stable before clicking the plus button
-        await this.diagramWebView.waitForTimeout(2000);
         await this.clickPlusButtonByIndex(index);
 
         const sidePanel = new SidePanel(this.diagramWebView);
