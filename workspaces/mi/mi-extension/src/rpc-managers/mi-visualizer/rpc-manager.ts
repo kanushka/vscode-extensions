@@ -79,7 +79,7 @@ import { extension } from "../../MIExtensionContext";
 import { DebuggerConfig } from "../../debugger/config";
 import { history } from "../../history";
 import { getStateMachine, navigate, openView, refreshUI } from "../../stateMachine";
-import { goToSource, handleOpenFile, appendContent, selectFolderDialog } from "../../util/fileOperations";
+import { formatAndSavePomDocument, goToSource, handleOpenFile, appendContent, selectFolderDialog } from "../../util/fileOperations";
 import { openPopupView } from "../../stateMachinePopup";
 import { SwaggerServer } from "../../swagger/server";
 import { log, outputChannel } from "../../util/logger";
@@ -89,10 +89,11 @@ import { copy } from 'fs-extra';
 
 const fs = require('fs');
 import { TextEdit } from "vscode-languageclient";
-import { downloadJavaFromMI, downloadMI, getProjectSetupDetails, getSupportedMIVersionsHigherThan, setPathsInWorkSpace, updateRuntimeVersionsInPom, getMIVersionFromPom } from '../../util/onboardingUtils';
-import { extractCAppDependenciesAsProjects } from "../../visualizer/activate";
+import { downloadJavaFromMI, downloadMI, getProjectSetupDetails, getSupportedMIVersionsHigherThan, setPathsInWorkSpace, updateRuntimeVersionsInPom, getMIVersionFromPom, isConsolidatedProject } from '../../util/onboardingUtils';
+import { extractCAppDependenciesAsProjects, loadCAppResources } from "../../visualizer/activate";
 import { findMultiModuleProjectsInWorkspaceDir } from "../../util/migrationUtils";
 import { MILanguageClient } from "../../lang-client/activator";
+import { reorderModulesByBuildOrder } from "../../debugger/pomResolver";
 
 Mustache.escape = escapeXml;
 
@@ -217,14 +218,21 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
             const updateDependenciesResult = await langClient?.updateConnectorDependencies();
             if (!updateDependenciesResult.toLowerCase().startsWith("success")) {              
                 const connectorsNotDownloaded: string[] = [];
+                const connectorsFromIntegrationProjectDeps: string[] = [];
                 const unavailableDependencies: string[] = [];
                 const missingDescriptorDependencies: string[] = [];
                 const versioningMismatchDependencies: string[] = [];
-                
+
                 // Extract connectors not downloaded
                 connectorsNotDownloaded.push(...extractDependenciesFromError(
                     updateDependenciesResult,
                     /Some connectors were not downloaded:\s*(.+?)(?:\.\s+(?:[A-Z]|$)|$)/
+                ));
+
+                // Extract connectors provided by integration project dependencies
+                connectorsFromIntegrationProjectDeps.push(...extractDependenciesFromError(
+                    updateDependenciesResult,
+                    /Following connectors are provided by integration project dependencies and cannot be downloaded:\s*(.+?)(?:\.\s+(?:[A-Z]|$)|$)/
                 ));
                 
                 // Extract unavailable integration project dependencies
@@ -247,6 +255,7 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
                 
                 const allFailedDependencies = [
                     ...connectorsNotDownloaded,
+                    ...connectorsFromIntegrationProjectDeps,
                     ...unavailableDependencies,
                     ...missingDescriptorDependencies,
                     ...versioningMismatchDependencies
@@ -285,6 +294,8 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
                         let warningMessage = "";
                         if (connectorsNotDownloaded.includes(dependencyString)) {
                             warningMessage = "Connector downloading failed.";
+                        } else if (connectorsFromIntegrationProjectDeps.includes(dependencyString)) {
+                            warningMessage = "This connector is provided by an integration project dependency and cannot be downloaded separately.";
                         } else if (unavailableDependencies.includes(dependencyString)) {
                             warningMessage = "Dependency downloading failed.";
                         } else if (missingDescriptorDependencies.includes(dependencyString)) {
@@ -306,18 +317,11 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
                     }
                 }
             }
-            
-            try {
-                await extractCAppDependenciesAsProjects(this.projectUri);
-                const loadResult = await langClient?.loadDependentCAppResources();
-                if (loadResult.startsWith("DUPLICATE ARTIFACTS")) {
-                    await window.showWarningMessage(
-                        loadResult,
-                        { modal: true }
-                    );
-                }
-            } catch (error) {
-                console.error("Error extracting CApp dependencies:", error);
+
+            await loadCAppResources(this.projectUri, langClient);
+            const parentDir = path.dirname(this.projectUri)
+            if (isConsolidatedProject(parentDir) && params?.isProjectDependenciesUpdated) {
+                await reorderModulesByBuildOrder(path.join(parentDir, 'pom.xml'));
             }
             resolve(reloadDependenciesResult);
         });
@@ -429,6 +433,13 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
             await extractCAppDependenciesAsProjects(this.projectUri);
             resolve(res);
         });
+    }
+
+    async refetchIntegrationProjectDependencies(): Promise<string> {
+        const langClient = await MILanguageClient.getInstance(this.projectUri);
+        const res = await langClient.refetchIntegrationProjectDependencies();
+        await loadCAppResources(this.projectUri, langClient);
+        return res;
     }
 
     async updateDependenciesFromOverview(params: UpdateDependenciesRequest): Promise<boolean> {
@@ -620,86 +631,99 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
     async getAvailableRuntimeServices(): Promise<RuntimeServicesResponse> {
         return new Promise(async (resolve) => {
-            const username = DebuggerConfig.getManagementUserName();
-            const password = DebuggerConfig.getManagementPassword();
-
-            const token = Buffer.from(`${username}:${password}`, 'utf8').toString('base64');
-            const authHeader = `Basic ${token}`;
-            // Create an HTTPS agent that ignores SSL certificate verification
-            // MI has ignored the verification for management api, check on this
-            const agent = new https.Agent({ rejectUnauthorized: false });
-
             const runtimeServicesResponse: RuntimeServicesResponse = {
                 api: undefined,
                 proxy: undefined,
                 dataServices: undefined
             };
+            try {
+                const username = DebuggerConfig.getManagementUserName();
+                const password = DebuggerConfig.getManagementPassword();
 
-            const managementPort = DebuggerConfig.getManagementPort();
-            const host = DebuggerConfig.getHost();
+                process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
 
-            const response = await fetch(`https://${host}:${managementPort}/management/login`, {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Basic ${token}`,
-                },
-                agent: agent // Pass the custom agent
-            });
+                const token = Buffer.from(`${username}:${password}`, 'utf8').toString('base64');
+                const authHeader = `Basic ${token}`;
+                // Create an HTTPS agent that ignores SSL certificate verification
+                // MI has ignored the verification for management api, check on this
+                const agent = new https.Agent({ rejectUnauthorized: false });
 
-            if (response.ok) {
-                const responseBody = await response.json() as { AccessToken: string } | undefined;
-                const authToken = responseBody?.AccessToken;
+                const managementPort = DebuggerConfig.getManagementPort();
+                const host = DebuggerConfig.getHost();
 
-                const apiResponse = await fetch(`https://${host}:${managementPort}/management/apis`, {
+                const response = await fetch(`https://${host}:${managementPort}/management/login`, {
                     method: 'GET',
                     headers: {
                         'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${authToken}`
+                        'Authorization': `Basic ${token}`,
                     },
                     agent: agent // Pass the custom agent
                 });
 
-                if (apiResponse.ok) {
-                    const apiResponseData = await apiResponse.json() as RuntimeServiceDetails | undefined;
-                    runtimeServicesResponse.api = apiResponseData;
+                if (response.ok) {
+                    const responseBody = await response.json() as { AccessToken: string } | undefined;
+                    const authToken = responseBody?.AccessToken;
+
+                    const apiResponse = await fetch(`https://${host}:${managementPort}/management/apis`, {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${authToken}`
+                        },
+                        agent: agent // Pass the custom agent
+                    });
+
+                    if (apiResponse.ok) {
+                        const apiResponseData = await apiResponse.json() as RuntimeServiceDetails | undefined;
+                        if (apiResponseData?.list && Array.isArray(apiResponseData.list)) {
+                            apiResponseData.list = apiResponseData.list.map(item => ({
+                                ...item,
+                                url: item.url ? this.replaceHostname(item.url, host) : item.url 
+                            }));
+                        }
+                        runtimeServicesResponse.api = apiResponseData;
+                    }
+
+
+                    // get the proxy details
+                    const proxyResponse = await fetch(`https://${host}:${managementPort}/management/proxy-services`, {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${authToken}`
+                        },
+                        agent: agent // Pass the custom agent
+                    });
+
+                    if (proxyResponse.ok) {
+                        const proxyResponseData = await proxyResponse.json() as RuntimeServiceDetails | undefined;
+                        runtimeServicesResponse.proxy = proxyResponseData;
+                    }
+
+                    // get the data services details
+                    const dataServicesResponse = await fetch(`https://${host}:${managementPort}/management/data-services`, {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${authToken}`
+                        },
+                        agent: agent // Pass the custom agent
+                    });
+
+                    if (dataServicesResponse.ok) {
+                        const dataServicesResponseData = await dataServicesResponse.json() as RuntimeServiceDetails | undefined;
+                        runtimeServicesResponse.dataServices = dataServicesResponseData;
+                    }
+                } else {
+                    log(`Error while login to MI management api: ${response.statusText}`);
+                    vscode.window.showErrorMessage(`Error while login into the MI Management API: ${response.statusText}`);
                 }
-
-
-                // get the proxy details
-                const proxyResponse = await fetch(`https://${host}:${managementPort}/management/proxy-services`, {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${authToken}`
-                    },
-                    agent: agent // Pass the custom agent
-                });
-
-                if (proxyResponse.ok) {
-                    const proxyResponseData = await proxyResponse.json() as RuntimeServiceDetails | undefined;
-                    runtimeServicesResponse.proxy = proxyResponseData;
-                }
-
-                // get the data services details
-                const dataServicesResponse = await fetch(`https://${host}:${managementPort}/management/data-services`, {
-                    method: 'GET',
-                    headers: {
-                        'Content-Type': 'application/json',
-                        'Authorization': `Bearer ${authToken}`
-                    },
-                    agent: agent // Pass the custom agent
-                });
-
-                if (dataServicesResponse.ok) {
-                    const dataServicesResponseData = await dataServicesResponse.json() as RuntimeServiceDetails | undefined;
-                    runtimeServicesResponse.dataServices = dataServicesResponseData;
-                }
-
+            } catch (error) {
+                log(`Error while fetching runtime services: ${error}`);
+                vscode.window.showErrorMessage(`Error while fetching runtime services: ${error}`);
+            } finally {
+                process.env.NODE_TLS_REJECT_UNAUTHORIZED = '1';
                 resolve(runtimeServicesResponse);
-            } else {
-                log(`Error while login to MI management api: ${response.statusText}`);
-                vscode.window.showErrorMessage(`Error while login into the MI Management API: ${response.statusText}`);
             }
         });
     }
@@ -832,31 +856,16 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
             edit.replace(Uri.file(pomPath), range, content);
         }
-        const success = await workspace.applyEdit(edit);
-        // Make sure to save the document after applying the edits
-        if (success) {
-            const document = await workspace.openTextDocument(pomPath);
-            await document.save();
-            // Format the pom content
-            const editorConfig = workspace.getConfiguration('editor');
-            let formattingOptions = {
-                    tabSize: editorConfig.get("tabSize") ?? 4,
-                    insertSpaces: editorConfig.get("insertSpaces") ?? false,
-                    trimTrailingWhitespace: editorConfig.get("trimTrailingWhitespace") ?? false
-                };
-            const edits = await vscode.commands.executeCommand<vscode.TextEdit[]>("vscode.executeFormatDocumentProvider",
-                            vscode.Uri.file(pomPath), formattingOptions);
-            if (edits && edits.length > 0) {
-                const edit = new vscode.WorkspaceEdit();
-                edit.set(vscode.Uri.file(pomPath), edits);
-                await vscode.workspace.applyEdit(edit);
-                await vscode.workspace.openTextDocument(pomPath).then(doc => doc.save());
-            }
-            if (getStateMachine(this.projectUri).context().view === MACHINE_VIEW.Overview) {
-                refreshUI(this.projectUri);
-            }
-        } else {
+        if (!await workspace.applyEdit(edit)) {
             throw new Error("Failed to apply edits to pom.xml");
+        }
+
+        const document = await workspace.openTextDocument(pomPath);
+        await document.save();
+        await formatAndSavePomDocument(pomPath);
+
+        if (getStateMachine(this.projectUri).context().view === MACHINE_VIEW.Overview) {
+            refreshUI(this.projectUri);
         }
     }
 
@@ -949,5 +958,16 @@ export class MiVisualizerRpcManager implements MIVisualizerAPI {
 
             resolve(false);
         });
+    }
+
+    replaceHostname(originalUrl: string, targetHost: string) {
+        try {
+            const urlObj = new URL(originalUrl);
+            urlObj.hostname = targetHost;
+            return urlObj.toString();
+        } catch (e) {
+            log(`Failed to parse URL. originalUrl="${originalUrl}", targetHost="${targetHost}", error=${e}`);
+            return originalUrl;
+        }
     }
 }
