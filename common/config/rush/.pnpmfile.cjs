@@ -25,6 +25,7 @@ module.exports = {
         if (deps['js-yaml']) deps['js-yaml'] = '4.1.1';
         if (deps['diff']) deps['diff'] = '8.0.3';
         if (deps['eslint']) deps['eslint'] = '^9.27.0';
+        if (deps['axios']) deps['axios'] = '1.15.0';
         if (deps['fast-xml-parser']) deps['fast-xml-parser'] = '5.7.0';
         if (deps['esbuild']) deps['esbuild'] = '0.25.12';
         if (deps['lodash']) deps['lodash'] = '4.18.0';
@@ -42,9 +43,6 @@ module.exports = {
         if (deps['handlebars']) deps['handlebars'] = '4.7.9';
         if (deps['tmp']) deps['tmp'] = '0.2.4';
         if (deps['undici']) deps['undici'] = '7.24.0';
-        // Force uuid to 14.0.0 globally to address GHSA-w5hq-g745-h8pq (missing buffer bounds check
-        // in v3/v5/v6). uuid 14.x is backward-compatible for the named exports used across this repo
-        // (import { v4 } from 'uuid'). Legacy path-based imports (e.g. 'uuid/v4') are not used here.
         if (deps['uuid']) deps['uuid'] = '14.0.0';
         if (deps['protobufjs']) {
           const currentVersion = deps['protobufjs'];
