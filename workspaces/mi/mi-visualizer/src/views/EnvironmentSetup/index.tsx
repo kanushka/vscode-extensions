@@ -220,7 +220,7 @@ export const EnvironmentSetup = () => {
             type="JAVA"
             pathDetails={javaPathDetails}
             recommendedVersion={recommendedVersions.javaVersion}
-            showInlineDownloadButton={!bothNotFound}
+            showInlineDownloadButton={!bothNotFound || !showDownloadButtons}
             handleDownload={handleJavaDownload}
             isDownloading={isJavaDownloading || isMIDownloading}
         />
