@@ -234,7 +234,7 @@ export class MILanguageClient {
                     this.updateErrors(ERRORS.INCOMPATIBLE_JDK);
                     throw new Error(errorMessage);
                 }
-                let executable: string = path.join(JAVA_HOME, 'bin', 'java');
+                let executable: string = path.join(JAVA_HOME, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
                 let schemaPath = extension.context.asAbsolutePath(path.join("synapse-schemas", "synapse_config.xsd"));
                 let langServerCP = extension.context.asAbsolutePath(path.join('ls', '*'));
 
