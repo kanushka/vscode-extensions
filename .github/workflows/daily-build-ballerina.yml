@@ -2,11 +2,11 @@ name: Ballerina Daily Build
 
 on:
   schedule:
-    # 05:30 UTC = 11:00 Colombo (nominal). Actual firing drifts 0–30 min
+    # 05:00 UTC = 10:30 Colombo (nominal). Actual firing drifts 0–30 min
     # later; build completes well under an hour, so the run finishes
     # comfortably before noon Colombo. Exact timing is not achievable
     # with scheduled triggers — platform limitation.
-    - cron: '30 5 * * *'
+    - cron: '0 5 * * *'
   workflow_dispatch:
     inputs:
       sendNotification:
@@ -15,16 +15,68 @@ on:
         default: true
 
 jobs:
+  PrepareBranches:
+    name: Prepare branch matrix
+    runs-on: ubuntu-latest
+    outputs:
+      vscodeBranches: ${{ steps.branches.outputs.vscodeBranches }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Load branch matrix config
+        id: branches
+        run: |
+          set -euo pipefail
+          CONFIG=.github/daily-build/release.properties
+          if [ ! -f "$CONFIG" ]; then
+            echo "::error::Missing $CONFIG"
+            exit 1
+          fi
+
+          branches=$(awk -F= '
+            /^[[:space:]]*#/ || /^[[:space:]]*$/ { next }
+            {
+              key=$1
+              gsub(/^[[:space:]]+|[[:space:]]+$/, "", key)
+              if (key == "vscodeBranches") {
+                value=substr($0, index($0, "=") + 1)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", value)
+                print value
+                exit
+              }
+            }
+          ' "$CONFIG")
+
+          if [ -z "$branches" ]; then
+            echo "::error::Required key 'vscodeBranches' missing or blank in $CONFIG"
+            exit 1
+          fi
+
+          json=$(
+            IFS=',' read -ra branchArray <<< "$branches"
+            for branch in "${branchArray[@]}"; do
+              branch="${branch#"${branch%%[![:space:]]*}"}"
+              branch="${branch%"${branch##*[![:space:]]}"}"
+              if [ -z "$branch" ]; then
+                echo "::error::vscodeBranches contains an empty branch entry"
+                exit 1
+              fi
+              printf '%s\n' "$branch"
+            done | jq -R -s -c 'split("\n")[:-1]'
+          )
+
+          echo "vscodeBranches=$json" >> "$GITHUB_OUTPUT"
+          echo "Using Ballerina daily-build branches: $json"
+
   Build:
     name: Build Ballerina Extension (${{ matrix.vscodeBranch }})
+    needs: PrepareBranches
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        vscodeBranch:
-          - main
-          - release/bi-1.8.x
+        vscodeBranch: ${{ fromJson(needs.PrepareBranches.outputs.vscodeBranches) }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -338,7 +390,7 @@ jobs:
 
   Release:
     name: Release (${{ matrix.vscodeBranch }})
-    needs: Build
+    needs: [PrepareBranches, Build]
     # !cancelled() lets this job run even when a different matrix leg of Build failed —
     # per-leg isolation. The `gate` step below skips this specific leg if its own
     # Build didn't produce the metadata artifact.
@@ -347,9 +399,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vscodeBranch:
-          - main
-          - release/bi-1.8.x
+        vscodeBranch: ${{ fromJson(needs.PrepareBranches.outputs.vscodeBranches) }}
     steps:
       - name: Slugify branch name
         id: slug
@@ -492,7 +542,7 @@ jobs:
 
   UpdateProductIntegrator:
     name: Update product-integrator (${{ matrix.vscodeBranch }})
-    needs: [Build, Release]
+    needs: [PrepareBranches, Build, Release]
     # Per-leg gating: !cancelled() allows this leg to run even when another matrix
     # leg of Build/Release failed. The `gate` step skips this specific leg if its
     # own Release didn't complete successfully (marker artifact absent).
@@ -501,9 +551,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vscodeBranch:
-          - main
-          - release/bi-1.8.x
+        vscodeBranch: ${{ fromJson(needs.PrepareBranches.outputs.vscodeBranches) }}
     steps:
       - name: Slugify branch name
         id: slug
@@ -567,6 +615,7 @@ jobs:
           path: product-integrator
 
       - name: Update ballerina.extension.version and open PR
+        id: productIntegratorPr
         if: steps.gate.outputs.skip != 'true'
         working-directory: product-integrator
         env:
@@ -612,6 +661,7 @@ jobs:
           pr_url=$(echo "$pr_response" | jq -r '.html_url // empty')
           if [ -n "$pr_url" ] && [ "$pr_url" != "null" ]; then
             echo "Created PR: $pr_url"
+            echo "prUrl=$pr_url" >> "$GITHUB_OUTPUT"
           else
             echo "::error::Failed to create PR"
             echo "$pr_response"
@@ -625,7 +675,10 @@ jobs:
         if: steps.gate.outputs.skip != 'true'
         run: |
           mkdir -p pi-ok
-          echo "updated=required" > pi-ok/pi.env
+          {
+            echo "updated=required"
+            echo "prUrl=${{ steps.productIntegratorPr.outputs.prUrl }}"
+          } > pi-ok/pi.env
 
       - name: Upload product-integrator success marker
         if: steps.gate.outputs.skip != 'true'
@@ -637,7 +690,7 @@ jobs:
 
   NotifySuccess:
     name: Notify Success (${{ matrix.vscodeBranch }})
-    needs: [Build, Release, UpdateProductIntegrator]
+    needs: [PrepareBranches, Build, Release, UpdateProductIntegrator]
     # Per-leg gating: !cancelled() allows this leg to run even when another matrix
     # leg failed. The `gate` step skips this specific leg if its own Build didn't
     # produce the metadata artifact. Manual dispatch can opt out via
@@ -647,9 +700,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        vscodeBranch:
-          - main
-          - release/bi-1.8.x
+        vscodeBranch: ${{ fromJson(needs.PrepareBranches.outputs.vscodeBranches) }}
     steps:
       - name: Slugify branch name
         id: slug
@@ -699,6 +750,29 @@ jobs:
         with:
           name: ballerina-daily-vsix-${{ steps.slug.outputs.slug }}
 
+      - name: Download product-integrator metadata
+        if: steps.gate.outputs.skip != 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: ballerina-daily-product-integrator-ok-${{ steps.slug.outputs.slug }}
+          path: pi-ok
+
+      - name: Load product-integrator metadata
+        if: steps.gate.outputs.skip != 'true'
+        id: pi
+        run: |
+          set -euo pipefail
+          prUrl=""
+          if [ -f pi-ok/pi.env ]; then
+            while IFS='=' read -r key value; do
+              [[ -z "${key// /}" || "$key" =~ ^[[:space:]]*# ]] && continue
+              if [ "$key" = "prUrl" ]; then
+                prUrl="$value"
+              fi
+            done < pi-ok/pi.env
+          fi
+          echo "prUrl=$prUrl" >> "$GITHUB_OUTPUT"
+
       - name: Notification - Ballerina
         if: steps.gate.outputs.skip != 'true'
         uses: ./.github/actions/dailyBuildNotification
@@ -706,10 +780,11 @@ jobs:
           title: "Ballerina (${{ matrix.vscodeBranch }})"
           fileName: ballerina
           chatAPI: ${{ secrets.BI_TEAM_CHAT_API }}
+          prUrl: ${{ steps.pi.outputs.prUrl }}
 
   NotifyFailure:
     name: Notify Failure
-    needs: [Build, Release, UpdateProductIntegrator]
+    needs: [PrepareBranches, Build, Release, UpdateProductIntegrator]
     if: ${{ always() && contains(needs.*.result, 'failure') && github.repository == 'wso2/vscode-extensions' && (github.event_name != 'workflow_dispatch' || inputs.sendNotification) }}
     runs-on: ubuntu-latest
     steps:
