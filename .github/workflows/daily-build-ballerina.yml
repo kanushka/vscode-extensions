@@ -273,24 +273,41 @@ jobs:
         env:
           isPreRelease: true
 
-      - name: Run Ballerina diagram snapshot tests
+      - name: Run Ballerina package tests
         continue-on-error: true
         run: |
           set +e
           mkdir -p /tmp/snapshot
-          for pkg in ballerina-visualizer type-diagram sequence-diagram component-diagram bi-diagram; do
-            echo "::group::Snapshot tests — $pkg"
+          for pkg in ballerina-visualizer ballerina-side-panel type-diagram sequence-diagram component-diagram bi-diagram; do
+            echo "::group::Package tests — $pkg"
             (cd "workspaces/ballerina/$pkg" && pnpm test) 2>&1 | tee "/tmp/snapshot/${pkg}.log"
             rc=${PIPESTATUS[0]}
             if [ "$rc" -eq 0 ]; then
               echo pass > "/tmp/snapshot/${pkg}.status"
             else
               echo fail > "/tmp/snapshot/${pkg}.status"
-              echo "::warning::Snapshot tests failed for $pkg (non-blocking for daily build)"
+              echo "::warning::Package tests failed for $pkg (non-blocking for daily build)"
             fi
             echo "::endgroup::"
           done
           exit 0
+
+      - name: Prepare Trivy output directory
+        run: mkdir -p /tmp/trivy
+
+      - name: Run Trivy vulnerability scanner
+        id: trivy
+        continue-on-error: true
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+          output: '/tmp/trivy/trivy-results.txt'
+          exit-code: '1'
+          timeout: '10m'
+          skip-dirs: 'common/temp'
+          ignore-unfixed: true
 
       - name: Get VSIX file name
         id: vsix
@@ -331,11 +348,11 @@ jobs:
             echo "| LS JAR | \`${lsArtifact}\` |"
             echo "| LS source run | [${lsRunId}](${lsRunUrl}) |"
             echo ""
-            echo "#### Snapshot tests"
+            echo "#### Package tests"
             echo ""
             echo "| Package | Test Suites | Tests | Status |"
             echo "|---|---|---|---|"
-            for pkg in ballerina-visualizer type-diagram sequence-diagram component-diagram bi-diagram; do
+            for pkg in ballerina-visualizer ballerina-side-panel type-diagram sequence-diagram component-diagram bi-diagram; do
               log="/tmp/snapshot/${pkg}.log"
               status=$(cat "/tmp/snapshot/${pkg}.status" 2>/dev/null || echo "fail")
               suites="—"
@@ -353,6 +370,26 @@ jobs:
               fi
               echo "| ${pkg} | ${suites} | ${tests} | ${status_txt} |"
             done
+            echo ""
+            echo "#### Trivy scan"
+            echo ""
+            if [ '${{ steps.trivy.outcome }}' = "success" ]; then
+              echo "Status: passed"
+            else
+              echo "Status: failed (non-blocking)"
+            fi
+            echo ""
+            if [ -s /tmp/trivy/trivy-results.txt ]; then
+              echo "<details><summary>Trivy output excerpt</summary>"
+              echo ""
+              echo '```'
+              sed -n '1,120p' /tmp/trivy/trivy-results.txt
+              echo '```'
+              echo ""
+              echo "</details>"
+            else
+              echo "No Trivy output file was produced."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload VSIX artifact
