@@ -367,6 +367,7 @@ interface NodeListProps {
     searchText?: string;
     panelBodySx?: React.CSSProperties;
     alwaysCollapsedCategories?: string[];
+    loading?: boolean;
 }
 
 export function NodeList(props: NodeListProps) {
@@ -388,7 +389,8 @@ export function NodeList(props: NodeListProps) {
         onLinkDevantProject,
         onRefreshDevantConnections,
         panelBodySx,
-        alwaysCollapsedCategories
+        alwaysCollapsedCategories,
+        loading
     } = props;
 
     const [searchText, setSearchText] = useState<string>("");
@@ -950,12 +952,12 @@ export function NodeList(props: NodeListProps) {
                     </S.Row>
                 )}
             </S.HeaderContainer>
-            {isSearching && (
+            {(loading || isSearching) && (
                 <S.PanelBody>
                     <NodeListSkeleton />
                 </S.PanelBody>
             )}
-            {!showGeneratePanel && !isSearching && (
+            {!showGeneratePanel && !isSearching && !loading && (
                 <S.PanelBody style={{ ...props.panelBodySx }}>
                     {getCategoryContainer(filteredCategories)}
                     {/* Show More Functions button - moved outside Logging category */}
@@ -979,7 +981,7 @@ export function NodeList(props: NodeListProps) {
                     )}
                 </S.PanelBody>
             )}
-            {showAiPanel && showGeneratePanel && (
+            {showAiPanel && showGeneratePanel && !loading && (
                 <S.PanelBody style={{ ...props.panelBodySx }}>
                     <S.AiContainer>
                         <S.Title>Describe what you want you want to do</S.Title>
