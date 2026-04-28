@@ -114,7 +114,7 @@ export const COMMANDS = {
     MANAGE_REGISTRY_PROPERTIES_COMMAND: 'MI.manage-registry-property',
 
     BI_EXTENSION: 'WSO2.ballerina-integrator',
-    BI_OPEN_COMMAND: 'ballerina.open.bi.welcome',
+    SETUP_BALLERINA: 'ballerina.setup',
     INSTALL_EXTENSION_COMMAND: 'workbench.extensions.installExtension'
 };
 
